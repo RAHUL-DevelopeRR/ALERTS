@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TANGEDCO - Weather Alert System</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Weather Alert Ticker -->
+    <div class="weather-ticker">
+        <div class="container">
+            <div class="ticker-content">
+                <span class="ticker-icon">🌩️</span>
+                <span class="ticker-text">WEATHER ALERT: Heavy rainfall and thunderstorm warning across Tamil Nadu. Stay updated with power outage alerts.</span>
+                <span class="ticker-time" id="tickerTime">Updated at 8:20 PM IST</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-top">
+                <div class="logo-section">
+                    <div class="logo">
+                        <div class="logo-icon">⚡</div>
+                        <div class="logo-text">
+                            <h1>TANGEDCO</h1>
+                            <p>Powering Tamil Nadu</p>
+                        </div>
+                    </div>
+                    <p class="subtitle">Tamil Nadu Generation and Distribution Corporation Limited</p>
+                </div>
+                <div class="emergency-contacts">
+                    <div class="contact-info">
+                        <span class="emergency-contact">📞 Minnagam 24x7: 94987 94987</span>
+                        <span class="emergency-contact">⚡ Power Failure: 1912</span>
+                        <span class="emergency-contact">📞 Emergency: 1800-180-8752</span>
+                    </div>
+                    <div class="notification-bell">
+                        🔔
+                        <span class="alert-count" id="alertCount">5</span>
+                    </div>
+                </div>
+            </div>
+            <nav class="main-nav">
+                <ul class="nav-list">
+                    <li><a href="#" class="nav-link active">Weather Alerts</a></li>
+                    <li><a href="#" class="nav-link">District Status</a></li>
+                    <li><a href="#" class="nav-link">Emergency Response</a></li>
+                    <li><a href="#" class="nav-link">Services</a></li>
+                    <li><a href="#" class="nav-link">About</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-background">
+            <div class="container">
+                <div class="hero-content">
+                    <h2 class="hero-title">Tamil Nadu Weather-Related Power Alert System</h2>
+                    <p class="hero-subtitle">Real-time monitoring of weather-induced power outages across all 38 districts</p>
+                    <div class="weather-stats">
+                        <div class="weather-stat">
+                            <div class="stat-value">437</div>
+                            <div class="stat-label">Weather Monitoring Systems</div>
+                        </div>
+                        <div class="weather-stat">
+                            <div class="stat-value">2 Cr</div>
+                            <div class="stat-label">SMS Alert Users</div>
+                        </div>
+                        <div class="weather-stat">
+                            <div class="stat-value">296</div>
+                            <div class="stat-label">Emergency Personnel</div>
+                        </div>
+                        <div class="weather-stat">
+                            <div class="stat-value">98.8%</div>
+                            <div class="stat-label">System Availability</div>
+                        </div>
+                    </div>
+                    <div class="quick-actions">
+                        <button class="btn btn--primary">Report Weather Damage</button>
+                        <button class="btn btn--primary">Check My Area</button>
+                        <button class="btn btn--outline">Emergency Contact</button>
+                        <button class="btn btn--outline">Weather Updates</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Dashboard -->
+    <main class="main-dashboard container">
+        <!-- Live Service Statistics -->
+        <section class="stats-section">
+            <h3>Live System Statistics</h3>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value">8.5M</div>
+                    <div class="stat-label">Total Consumers</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">1,860</div>
+                    <div class="stat-label">Active Feeders</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">485</div>
+                    <div class="stat-label">Substations</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">12,500 MW</div>
+                    <div class="stat-label">Current Load</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">15,200 MW</div>
+                    <div class="stat-label">Peak Load Today</div>
+                </div>
+                <div class="stat-card weather-alerts">
+                    <div class="stat-value">5</div>
+                    <div class="stat-label">Active Weather Alerts</div>
+                </div>
+            </div>
+        </section>
+
+        <div class="dashboard-grid">
+            <!-- Weather Alerts Section -->
+            <section class="weather-alerts-section">
+                <div class="alerts-header">
+                    <h3>🌩️ LIVE WEATHER-RELATED POWER ALERTS</h3>
+                    <div class="alert-filters">
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn" data-filter="Active">Active</button>
+                        <button class="filter-btn" data-filter="Resolved">Resolved</button>
+                        <button class="filter-btn" data-filter="Scheduled Shutdown">Preventive</button>
+                    </div>
+                </div>
+                <div class="alerts-container" id="weatherAlertsContainer">
+                    <!-- Weather alerts will be populated by JavaScript -->
+                </div>
+                <div class="last-updated">
+                    Last updated: <span id="lastUpdated">2025-09-22 20:20:28</span>
+                </div>
+            </section>
+
+            <!-- District Weather Risk Status -->
+            <section class="district-section">
+                <h3>District Weather Risk Status</h3>
+                <div class="district-search">
+                    <input type="text" class="form-control" placeholder="Search districts..." id="districtSearch">
+                </div>
+                <div class="risk-legend">
+                    <div class="legend-item"><span class="risk-very-high"></span>Very High</div>
+                    <div class="legend-item"><span class="risk-high"></span>High</div>
+                    <div class="legend-item"><span class="risk-medium"></span>Medium</div>
+                    <div class="legend-item"><span class="risk-low"></span>Low</div>
+                </div>
+                <div class="district-list" id="districtList">
+                    <!-- District data will be populated by JavaScript -->
+                </div>
+            </section>
+        </div>
+
+        <!-- Weather Monitoring Dashboard -->
+        <section class="weather-monitoring">
+            <h3>Weather Monitoring Dashboard</h3>
+            <div class="monitoring-grid">
+                <div class="monitor-card">
+                    <div class="monitor-icon">🌡️</div>
+                    <h4>Temperature</h4>
+                    <div class="monitor-value">32°C</div>
+                    <div class="monitor-status">Normal</div>
+                </div>
+                <div class="monitor-card">
+                    <div class="monitor-icon">💨</div>
+                    <h4>Wind Speed</h4>
+                    <div class="monitor-value">45 km/h</div>
+                    <div class="monitor-status alert">High Alert</div>
+                </div>
+                <div class="monitor-card">
+                    <div class="monitor-icon">🌧️</div>
+                    <h4>Rainfall</h4>
+                    <div class="monitor-value">125 mm</div>
+                    <div class="monitor-status alert">Heavy</div>
+                </div>
+                <div class="monitor-card">
+                    <div class="monitor-icon">⚡</div>
+                    <h4>Lightning Activity</h4>
+                    <div class="monitor-value">15 strikes</div>
+                    <div class="monitor-status warning">Moderate</div>
+                </div>
+                <div class="monitor-card">
+                    <div class="monitor-icon">🌀</div>
+                    <h4>Cyclone Warning</h4>
+                    <div class="monitor-value">Active</div>
+                    <div class="monitor-status alert">Nagapattinam</div>
+                </div>
+                <div class="monitor-card">
+                    <div class="monitor-icon">👥</div>
+                    <h4>Response Teams</h4>
+                    <div class="monitor-value">9</div>
+                    <div class="monitor-status normal">Deployed</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Emergency Services -->
+        <section class="emergency-services">
+            <h3>Emergency Weather Response Services</h3>
+            <div class="services-grid">
+                <div class="service-card weather-service">
+                    <div class="service-icon">📱</div>
+                    <h4>SMS Weather Alerts</h4>
+                    <p>Register for real-time weather-related power outage alerts</p>
+                </div>
+                <div class="service-card weather-service">
+                    <div class="service-icon">🌩️</div>
+                    <h4>Storm Damage Report</h4>
+                    <p>Report weather-related power infrastructure damage</p>
+                </div>
+                <div class="service-card weather-service">
+                    <div class="service-icon">🗺️</div>
+                    <h4>Area Weather Status</h4>
+                    <p>Check weather conditions and outages in your area</p>
+                </div>
+                <div class="service-card weather-service">
+                    <div class="service-icon">🚨</div>
+                    <h4>Emergency Hotline</h4>
+                    <p>24x7 weather emergency support: Minnagam 94987 94987</p>
+                </div>
+                <div class="service-card weather-service">
+                    <div class="service-icon">📞</div>
+                    <h4>WhatsApp Support</h4>
+                    <p>Weather alerts and support: 94458-50811</p>
+                </div>
+                <div class="service-card weather-service">
+                    <div class="service-icon">🔔</div>
+                    <h4>Push Notifications</h4>
+                    <p>Get instant weather-related power outage notifications</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- SMS Alert Registration -->
+        <section class="sms-registration">
+            <div class="card">
+                <div class="card__body">
+                    <h3>Register for Weather Alert SMS</h3>
+                    <p>Get real-time SMS alerts for weather-related power outages in your area</p>
+                    <form class="registration-form" id="smsRegistrationForm">
+                        <div class="form-group">
+                            <label class="form-label" for="mobileNumber">Mobile Number</label>
+                            <input type="tel" class="form-control" id="mobileNumber" placeholder="Enter your mobile number" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="district">Select District</label>
+                            <select class="form-control" id="district" required>
+                                <option value="">Choose your district</option>
+                                <option value="Chennai">Chennai</option>
+                                <option value="Coimbatore">Coimbatore</option>
+                                <option value="Madurai">Madurai</option>
+                                <option value="Tiruchirappalli">Tiruchirappalli</option>
+                                <option value="Salem">Salem</option>
+                                <option value="Tirunelveli">Tirunelveli</option>
+                                <option value="Erode">Erode</option>
+                                <option value="Vellore">Vellore</option>
+                                <option value="Dindigul">Dindigul</option>
+                                <option value="Thanjavur">Thanjavur</option>
+                                <option value="Nilgiris">Nilgiris</option>
+                                <option value="Nagapattinam">Nagapattinam</option>
+                                <option value="Kanyakumari">Kanyakumari</option>
+                                <option value="Theni">Theni</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn--primary btn--full-width">Register for Alerts</button>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h4>Emergency Contacts</h4>
+                    <ul>
+                        <li><strong>Minnagam 24x7:</strong> <a href="tel:9498794987" target="_blank">94987 94987</a></li>
+                        <li><strong>Power Failure:</strong> <a href="tel:1912" target="_blank">1912</a></li>
+                        <li><strong>Emergency Toll-Free:</strong> <a href="tel:18001808752" target="_blank">1800-180-8752</a></li>
+                        <li><strong>WhatsApp:</strong> <a href="https://wa.me/919445850811" target="_blank">94458-50811</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Weather Information</h4>
+                    <ul>
+                        <li><a href="#" target="_blank">IMD Weather Updates</a></li>
+                        <li><a href="#" target="_blank">Cyclone Warnings</a></li>
+                        <li><a href="#" target="_blank">District Weather Alerts</a></li>
+                        <li><a href="#" target="_blank">Storm Preparedness</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>TANGEDCO Services</h4>
+                    <ul>
+                        <li><a href="#" target="_blank">Bill Payment</a></li>
+                        <li><a href="#" target="_blank">New Connection</a></li>
+                        <li><a href="#" target="_blank">Load Enhancement</a></li>
+                        <li><a href="#" target="_blank">TANGEDCO Mobile App</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Disaster Management</h4>
+                    <ul>
+                        <li><a href="#" target="_blank">TN Disaster Management</a></li>
+                        <li><a href="#" target="_blank">Emergency Guidelines</a></li>
+                        <li><a href="#" target="_blank">Safety Instructions</a></li>
+                        <li><a href="#" target="_blank">Community Preparedness</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>© 2025 TANGEDCO. All rights reserved</p>
+                <p>Weather data integration: IMD, Regional Meteorological Centre</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
