@@ -51,6 +51,22 @@ curl -s -X POST localhost:8787/v1/pair -H 'Content-Type: application/json' \
 
 Use the shop's Cloudflare account (created with the shop's email; the developer is a member).
 
+**One command (recommended).** From the repository root, after signing in once with `cd khata/api && npm ci && npx wrangler login`
+(or with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set; token permissions: Workers Scripts Edit, D1 Edit,
+Account Settings Read):
+
+```bash
+./khata/tools/deploy-server.sh            # safe to re-run; add --rotate-setup-key to issue a new setup key
+```
+
+It creates the `khata` D1 database in APAC if missing, writes its id into `wrangler.jsonc`, applies migrations,
+generates `PEPPER` and `SETUP_KEY` once (saved to `khata/api/.deploy-secrets`, git-ignored, mode 600), deploys with
+those secrets, checks `/v1/health` and that `/v1/me` answers 401, and prints the server address and setup key to
+type into the owner's phone (Settings → Server copy → First-time setup). It never replaces an existing `PEPPER`.
+The account needs a workers.dev subdomain: open the dashboard's Workers & Pages page once to pick one.
+
+**Manual steps** (what the script does):
+
 ```bash
 npx wrangler login
 npx wrangler d1 create khata --location=apac        # copy database_id into wrangler.jsonc

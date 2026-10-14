@@ -24,7 +24,8 @@ internet is needed. Then Settings → About → **Run self-test** should show ev
 
 ## Optional: shop server (backup + several phones)
 
-Deploy `api/` to the shop's own Cloudflare account (free plan is enough): steps in `api/README.md`. Then on the
+Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`
+after `cd khata/api && npm ci && npx wrangler login`; details in `api/README.md`. Then on the
 owner's phone: Settings → Server copy → First-time setup (server address + setup key). Add more phones from
 Settings → Devices → Add a phone. Print the recovery codes and keep them in the cash box.
 
