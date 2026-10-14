@@ -26,13 +26,19 @@ cd android
 
 The APK lands in `android/app/build/outputs/apk/debug/app-debug.apk`. It is about 13 MB because it includes all four ABIs, so it also runs on x86 emulators.
 
+Debug builds install as **`live.zerox.kadankanakku.debug`**, labelled "Kadan Kanakku DEBUG", next to (never over) the real app. They are signed with the build machine's throwaway debug key, so a debug build is for testing only: it can never become the shop's ledger app, and a debug build from another machine will not install over it. The shop phone runs the release-signed `live.zerox.kadankanakku` only.
+
 `npm run build:android` runs the first three steps in one go.
 
 ### What the Android project is set up to do
 
 | Setting | Where | Why |
 |---|---|---|
-| `allowBackup="false"` | `AndroidManifest.xml` | Android Auto Backup would copy the live WAL-mode SQLite files as an inconsistent set. Backups are the app's own snapshots plus sync. |
+| `allowBackup="false"` + `dataExtractionRules` | `AndroidManifest.xml`, `res/xml/data_extraction_rules.xml` | Android Auto Backup would copy the live WAL-mode SQLite files as an inconsistent set. On Android 12+ `allowBackup="false"` no longer stops device-to-device transfer ("copy from old phone"), which would clone the ledger together with this phone's `device_id` and customer-code block; the rules exclude everything from both. A new phone gets its data by pairing (pull) or "Restore from file". Backups are the app's own snapshots plus sync. |
+| Debug ID `….debug` | `app/build.gradle` (`applicationIdSuffix`) | A debug-key APK can never occupy the production ID on the shop phone. |
+| Old WebView page | `capacitor.config.ts` (`server.errorPath`), `public/webview-old.html` | Below System WebView 80 Capacitor shows this Tamil/English "update Android System WebView" page instead of a blank screen. |
+| Tamil + English only | `app/build.gradle` (`androidResources.localeFilters`) | Drops the ~90 other locales AndroidX would bundle. |
+| No `captureInput` | `capacitor.config.ts` | It would replace the WebView's input connection with a dummy one, which breaks Tamil keyboards (no `input` events, no composing) and the dial pad for `type=tel`. |
 | Permissions are INTERNET, ACCESS_NETWORK_STATE and VIBRATE only | `AndroidManifest.xml` | Storage, media, camera, biometric, contacts and location permissions are stripped with `tools:node="remove"` even when a plugin merges them in. The merged manifest also has `live.zerox.kadankanakku.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. AndroidX defines it as a signature-level permission for the app's own broadcast receivers (the Share plugin uses it). Users never see it. |
 | HTTPS only in release | `res/xml/network_security_config.xml` | Release builds trust only system CAs and refuse cleartext. |
 | Cleartext allowed in debug | `src/debug/res/xml/network_security_config.xml` | This lets you test against `wrangler dev --ip 0.0.0.0` at `http://<LAN-IP>:8787`. Only debug builds get it. |
@@ -116,7 +122,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk   # -r keeps the ap
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-`-r` replaces the app and keeps its data. **Never** `adb uninstall` the shop's phone or run `pm clear` on it, because both wipe the local ledger. A debug build and a release build of this app have the same application ID but different signatures. To switch a phone from one to the other you must uninstall first, which wipes the data. So decide early which build a shop phone runs, and stay on it.
+`-r` replaces the app and keeps its data. **Never** `adb uninstall` the shop's phone or run `pm clear` on it, because both wipe the local ledger. Debug builds have their own ID (`live.zerox.kadankanakku.debug`) and install as a separate "DEBUG" app, so they never block the release app; do not keep real shop data in a debug copy, because it lives under a key that only exists on the machine that built it. Every release APK must be signed with the same release keystore (keep two copies off the build machine, see step 1); an APK signed with any other key cannot update the installed app.
 
 If `adb install` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, the installed copy was signed with a different key. Stop there and do not uninstall a phone that holds real data. Back up first (Settings → Backup → "Save a backup copy"), then install.
 

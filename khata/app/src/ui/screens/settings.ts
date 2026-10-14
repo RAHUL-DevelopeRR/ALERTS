@@ -5,9 +5,9 @@ import type { Settings } from '../../data/types';
 import type { Role } from '../../data/types';
 import { setLang, t } from '../../i18n';
 import { afterWrite, app, refreshSettings } from '../app';
-import { restoreFromFile, saveBackupCopy } from '../backup';
+import { listLocalCopies, restoreFromFile, restoreLocalCopy, saveBackupCopy } from '../backup';
 import { add, button, clear, h, type Child } from '../components/dom';
-import { alertDialog, confirmDialog, dialog, toast } from '../components/overlay';
+import { actionSheet, alertDialog, confirmDialog, dialog, toast } from '../components/overlay';
 import { shell } from '../components/shell';
 import { pillContent } from '../components/sync-pill';
 import { errorText, reasonText } from '../errors';
@@ -162,8 +162,34 @@ function safetySection(s: Settings): HTMLElement {
   );
 }
 
+async function pickLocalCopy(): Promise<void> {
+  let copies: Awaited<ReturnType<typeof listLocalCopies>>;
+  try {
+    copies = await listLocalCopies();
+  } catch (e) {
+    toast(errorText(e), { error: true });
+    return;
+  }
+  if (!copies.length) {
+    toast(t('set.dailyNone'));
+    return;
+  }
+  actionSheet({
+    title: t('set.dailyTitle'),
+    actions: copies.map((c) => ({
+      label: c.label,
+      run: async () => {
+        if (await restoreLocalCopy(c.name)) void router.rerender();
+      },
+    })),
+  });
+}
+
 function backupSection(s: Settings): HTMLElement {
-  const fileIn = h('input', { class: 'hidden', attrs: { type: 'file', accept: 'application/json,.json', 'data-testid': 'restore-file' } });
+  // No `accept`: Capacitor maps it to EXTRA_MIME_TYPES and the system picker then greys out backups that WhatsApp,
+  // Telegram or a file manager report as application/octet-stream or text/plain. validateBackup() rejects
+  // anything that is not a backup.
+  const fileIn = h('input', { class: 'hidden', attrs: { type: 'file', 'data-testid': 'restore-file' } });
   fileIn.addEventListener('change', () => {
     const f = fileIn.files?.[0];
     fileIn.value = '';
@@ -183,6 +209,7 @@ function backupSection(s: Settings): HTMLElement {
       save,
       h('p', { class: 'input-help', attrs: { 'data-testid': 'last-backup' }, text: t('set.lastBackup', { when: when(s.last_backup_at) }) }),
       button(t('set.restore'), () => fileIn.click(), 'btn btn-block', { 'data-testid': 'restore' }),
+      button(t('set.restoreDaily'), () => void pickLocalCopy(), 'btn btn-block', { 'data-testid': 'restore-daily' }),
       fileIn,
     ),
   );

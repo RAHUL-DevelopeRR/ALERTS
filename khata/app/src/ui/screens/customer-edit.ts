@@ -1,4 +1,8 @@
-/** Add / edit customer: name (required), mobile (optional, duplicate warning), note. "Save & add credit" first. */
+/**
+ * Add / edit customer: name (required), mobile (optional, duplicate warning), note. "Save & add credit" first.
+ * From quick entry (params.quick = '1'): saving goes straight to the keypad in quick mode, which returns to the
+ * quick list, so the sitting (count, sticky date) carries on.
+ */
 import { cleanName, formatCode, formatPhone, normalizePhone, normName } from '../../core/ledger';
 import type { Customer } from '../../data/types';
 import { t } from '../../i18n';
@@ -7,6 +11,7 @@ import { button, clear, h } from '../components/dom';
 import { dialog, toast } from '../components/overlay';
 import { shell, showFooter } from '../components/shell';
 import { errorText, errorCode } from '../errors';
+import { quick } from '../quick-session';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { rowDetail } from './home';
@@ -15,6 +20,7 @@ export const customerEditScreen: Screen = async (root, route) => {
   const id = route.params.id;
   const existing = id ? await app.repo.getCustomer(id) : null;
   if (id && !existing) throw new Error('NOT_FOUND');
+  const fromQuick = !existing && route.params.quick === '1' && quick.active;
   const { body, footer } = shell(root, { title: existing ? t('cust.edit') : t('cust.new'), back: true });
 
   const nameIn = h('input', { class: 'input', attrs: { type: 'text', placeholder: t('cust.namePh'), autocomplete: 'off', autocapitalize: 'words', maxlength: 100, enterkeyhint: 'next', 'data-testid': 'cust-name' } });
@@ -24,7 +30,10 @@ export const customerEditScreen: Screen = async (root, route) => {
   phoneIn.value = existing?.phone ? formatPhone(existing.phone) : '';
   noteIn.value = existing?.note ?? '';
   const nameErr = h('div', 'inline-warn hidden');
+  /** Duplicate-number warning, managed by the debounced checkPhone(). */
   const phoneWarn = h('div', { class: 'inline-warn hidden', attrs: { 'data-testid': 'phone-warn' } });
+  /** "Number not valid", set by save() only; checkPhone() never touches it (it used to wipe it 250 ms later). */
+  const phoneErr = h('div', { class: 'inline-warn hidden', attrs: { 'data-testid': 'phone-err' } });
 
   let phoneTimer: ReturnType<typeof setTimeout> | null = null;
   const checkPhone = async (): Promise<void> => {
@@ -47,6 +56,7 @@ export const customerEditScreen: Screen = async (root, route) => {
     phoneWarn.classList.remove('hidden');
   };
   phoneIn.addEventListener('input', () => {
+    phoneErr.classList.add('hidden');
     if (phoneTimer) clearTimeout(phoneTimer);
     phoneTimer = setTimeout(() => void checkPhone(), 250);
   });
@@ -65,7 +75,7 @@ export const customerEditScreen: Screen = async (root, route) => {
 
   body.append(
     h('label', 'field', h('span', { class: 'field-label', text: t('cust.name') }), nameIn, nameErr),
-    h('label', 'field', h('span', { class: 'field-label', text: `${t('cust.phone')} (${t('common.optional')})` }), phoneIn, phoneWarn),
+    h('label', 'field', h('span', { class: 'field-label', text: `${t('cust.phone')} (${t('common.optional')})` }), phoneIn, phoneErr, phoneWarn),
     h('label', 'field', h('span', { class: 'field-label', text: `${t('cust.note')} (${t('common.optional')})` }), noteIn),
   );
 
@@ -86,16 +96,19 @@ export const customerEditScreen: Screen = async (root, route) => {
       nameIn.focus();
       return;
     }
+    if (phoneTimer) {
+      clearTimeout(phoneTimer);
+      phoneTimer = null;
+    }
     let phone: string | null;
     try {
       phone = normalizePhone(phoneIn.value);
     } catch {
-      phoneWarn.classList.remove('hidden');
-      clear(phoneWarn);
-      phoneWarn.textContent = t('err.BAD_PHONE');
+      showErr(phoneErr, t('err.BAD_PHONE'));
       phoneIn.focus();
       return;
     }
+    phoneErr.classList.add('hidden');
     saving = true;
     for (const b of footer.querySelectorAll('button')) b.disabled = true;
     try {
@@ -105,7 +118,8 @@ export const customerEditScreen: Screen = async (root, route) => {
           const choice = await sameNameDialog(same);
           if (choice === null) return;
           if (choice !== 'new') {
-            await router.replace('customer', { id: choice });
+            if (fromQuick) await router.replace('entry', { id: choice, kind: 'GIVE', quick: '1' });
+            else await router.replace('customer', { id: choice });
             return;
           }
         }
@@ -120,6 +134,12 @@ export const customerEditScreen: Screen = async (root, route) => {
       const c = await app.repo.createCustomer({ name, phone, note: noteIn.value });
       afterWrite();
       toast(t('cust.savedAs', { code: formatCode(c.code) }));
+      if (fromQuick) {
+        // Back to the quick list on plain Save; straight to the quick keypad on "Save + credit".
+        if (thenCredit) await router.replace('entry', { id: c.id, kind: 'GIVE', quick: '1' });
+        else router.back({ force: true });
+        return;
+      }
       await router.replace('customer', { id: c.id });
       if (thenCredit) await router.go('entry', { id: c.id, kind: 'GIVE' });
     } catch (e) {
@@ -151,7 +171,8 @@ export const customerEditScreen: Screen = async (root, route) => {
 /** "There is already a Murugan (C-0017, note). Open existing / Add new". Returns an id, 'new', or null (cancel). */
 async function sameNameDialog(same: Customer[]): Promise<string | 'new' | null> {
   const first = same[0];
-  const buttons = same.slice(0, 3).map((c) => ({ label: `${t('cust.openExisting', { code: formatCode(c.code) })}${c.note ? ` · ${c.note}` : ''}`, value: c.id as string | null }));
+  // "C-0002 கணக்கைத் திற" with the note on its own line, so the verb never sits between the code and the note.
+  const buttons = same.slice(0, 3).map((c) => ({ label: `${t('cust.openExisting', { code: formatCode(c.code) })}${c.note ? `\n${c.note}` : ''}`, value: c.id as string | null }));
   return dialog<string | null>({
     title: t('cust.sameNameTitle'),
     body: h('p', { text: t('cust.sameName', { name: first.name, detail: rowDetail(first).replace(' · ', ', ') }) }),

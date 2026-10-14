@@ -5,10 +5,14 @@
     <!--
       allowBackup=false: Android Auto Backup would copy the live WAL-mode SQLite files (inconsistent as a set) and,
       on Android 7-11, ignores data_extraction_rules. Backups are the app's own snapshots + server sync instead.
+      dataExtractionRules: on Android 12+ allowBackup=false no longer stops device-to-device transfer, which would
+      clone the ledger WITH this phone's device_id and customer-code block onto the new phone; the rules exclude
+      everything from both cloud backup and device transfer (see res/xml/data_extraction_rules.xml).
       networkSecurityConfig: release forbids cleartext; src/debug overrides it for wrangler dev on a LAN IP.
     -->
     <application
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

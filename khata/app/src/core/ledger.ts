@@ -170,9 +170,10 @@ export function istDayBoundsUTC(day: string): { start: string; end: string } {
 }
 
 const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const MONTHS_TA = ['ஜன', 'பிப்', 'மார்', 'ஏப்', 'மே', 'ஜூன்', 'ஜூலை', 'ஆக', 'செப்', 'அக்', 'நவ', 'டிச'];
+/** Newspaper-style abbreviations with a full stop, so 'ஆக.' is not read as the word ஆக and ஜன./நவ./டிச. do not look cut off. */
+const MONTHS_TA = ['ஜன.', 'பிப்.', 'மார்.', 'ஏப்.', 'மே', 'ஜூன்', 'ஜூலை', 'ஆக.', 'செப்.', 'அக்.', 'நவ.', 'டிச.'];
 
-/** "12 Oct 2026" / "12 அக் 2026"; `short` drops the year. */
+/** "12 Oct 2026" / "12 அக். 2026"; `short` drops the year. */
 export function formatDay(day: string, lang: 'en' | 'ta', short = false): string {
   const [y, m, d] = day.split('-').map(Number);
   const mon = (lang === 'ta' ? MONTHS_TA : MONTHS_EN)[m - 1];
@@ -410,7 +411,11 @@ export function matchesQuery(key: string, query: string): boolean {
   return q.split(' ').every((t) => {
     if (key.includes(t)) return true;
     const latin = hasTamil(t) ? transliterateTamil(t) : t;
-    return key.includes(latin) || key.includes(phoneticFold(latin));
+    if (key.includes(latin)) return true;
+    // The fold collapses doubled letters and merges z/s, q/k...: "zzz" folds to "s", which would match most of
+    // the shop. Use the folded form only when it still carries at least 3 letters.
+    const folded = phoneticFold(latin);
+    return folded.length >= 3 && key.includes(folded);
   });
 }
 

@@ -4,17 +4,24 @@ import type { HomeRow } from '../../data/types';
 import { t } from '../../i18n';
 import { app, refreshSettings } from '../app';
 import { add, button, clear, h, icon } from '../components/dom';
+import { dialog } from '../components/overlay';
+import { searchField } from '../components/search';
 import { shell } from '../components/shell';
 import { syncPill } from '../components/sync-pill';
-import { money, toneClass, balanceLabel } from '../format';
+import { money, toneClass } from '../format';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { saveBackupCopy } from '../backup';
 
 type Sort = 'recent' | 'due' | 'oldest';
 
-/** Survives navigation (back from a customer keeps the search), reset on a fresh app start. */
-export const homeState = { q: '', sort: 'recent' as Sort, late: false };
+/** Survives navigation (back from a customer keeps the search and the due list), reset on a fresh app start.
+ *  The search is cleared after an entry is saved (entry.ts), so the next customer starts from a clean box.
+ *  dueDays / dueMin: the morning collection round's "due list" (0 = no limit; both 0 = list off). */
+export const homeState = { q: '', sort: 'recent' as Sort, dueOn: false, dueDays: 0, dueMin: 0 };
+
+const DUE_DAY_CHOICES = [0, 7, 15, 30, 60];
+const DUE_MIN_CHOICES = [0, 10_000, 50_000, 100_000, 500_000];
 
 const BACKUP_NUDGE_MS = 7 * 86_400_000;
 const SKEW_WARN_MS = 10 * 60_000;
@@ -69,7 +76,7 @@ function customerRow(r: HomeRow, paired: boolean): HTMLElement {
     h(
       'span',
       'cust-side',
-      h('span', { class: `cust-bal amt ${toneClass(r.balance_paise)}`, text: r.balance_paise === 0 ? balanceLabel(0) : money(r.balance_paise) }),
+      h('span', { class: `cust-bal amt ${toneClass(r.balance_paise)}`, text: money(r.balance_paise) }),
       r.balance_paise < 0 ? h('span', { class: 'cust-days adv', text: t('bal.advance') }) : null,
       dt && r.balance_paise >= 0 ? h('span', { class: `cust-days${dt.late ? ' late' : ''}`, text: dt.text }) : null,
     ),
@@ -96,7 +103,7 @@ export const homeScreen: Screen = async (root, route) => {
     { class: 'summary', attrs: { 'data-testid': 'summary' } },
     h('div', { class: 'summary-label', text: t('home.toCollect') }),
     h('div', { class: 'summary-amt num', text: formatINR(totals.receivable_paise) }),
-    h('div', { class: 'summary-sub', text: totals.customers_owing === 1 ? t('home.fromOne') : t('home.fromN', { n: totals.customers_owing }) }),
+    h('div', { class: 'summary-sub', text: totals.customers_owing === 0 ? t('home.fromNone') : totals.customers_owing === 1 ? t('home.fromOne') : t('home.fromN', { n: totals.customers_owing }) }),
     totals.advance_paise > 0 ? h('div', { class: 'summary-adv', text: t('home.advances', { amount: formatINR(totals.advance_paise) }) }) : null,
   );
 
@@ -121,25 +128,83 @@ export const homeScreen: Screen = async (root, route) => {
   }
 
   // ---- search + chips
-  const input = h('input', {
-    class: 'input',
-    attrs: { type: 'search', placeholder: t('home.search'), autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'search', 'data-testid': 'search', value: homeState.q },
+  const search = searchField({
+    value: homeState.q,
+    testid: 'search',
+    onInput: (q) => {
+      homeState.q = q;
+      paint();
+    },
+    onEnter: () => void app.platform.hideKeyboard(),
   });
-  input.value = homeState.q;
-  const chipRow = h('div', 'chips scroll');
+  // Sort chips wrap onto a second line instead of scrolling off-screen; the due list is a separate, clearly
+  // different action (a filter with its own sheet), not a fourth sort.
+  const chipRow = h('div', 'chips');
+  const dueLine = h('div', { class: 'due-total hidden', attrs: { 'data-testid': 'due-total' } });
   const list = h('div', { class: 'list', attrs: { 'data-testid': 'cust-list' } });
   const emptyEl = h('div', 'empty hidden');
   const keys = new Map(rows.map((r) => [r.id, searchKey(r)]));
 
+  const dueWhat = (): string => {
+    const bits: string[] = [];
+    if (homeState.dueDays) bits.push(t('home.dueDays', { n: homeState.dueDays }));
+    if (homeState.dueMin) bits.push(t('home.dueMin', { amount: formatINR(homeState.dueMin) }));
+    return bits.join(' · ') || t('home.dueAny');
+  };
+
+  const openDueSheet = async (): Promise<void> => {
+    let days = homeState.dueOn ? homeState.dueDays : 30;
+    let min = homeState.dueOn ? homeState.dueMin : 0;
+    const daysRow = h('div', 'chips');
+    const minRow = h('div', 'chips');
+    const paintSheet = (): void => {
+      clear(daysRow);
+      clear(minRow);
+      for (const d of DUE_DAY_CHOICES) {
+        daysRow.appendChild(
+          h('button', { class: `chip${days === d ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': days === d ? 'true' : 'false', 'data-testid': `due-days-${d}` }, text: d ? t('home.dueDays', { n: d }) : t('home.dueAny'), on: { click: () => { days = d; paintSheet(); } } }),
+        );
+      }
+      for (const m of DUE_MIN_CHOICES) {
+        minRow.appendChild(
+          h('button', { class: `chip${min === m ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': min === m ? 'true' : 'false', 'data-testid': `due-min-${m}` }, text: m ? t('home.dueMin', { amount: formatINR(m) }) : t('home.dueAny'), on: { click: () => { min = m; paintSheet(); } } }),
+        );
+      }
+    };
+    paintSheet();
+    const choice = await dialog<'show' | 'clear' | null>({
+      title: t('home.dueList'),
+      body: h('div', null, h('div', { class: 'field-label', text: t('home.dueDaysLabel') }), daysRow, h('div', { class: 'field-label', style: { marginTop: '10px' }, text: t('home.dueMinLabel') }), minRow),
+      buttons: [
+        { label: t('common.clear'), value: 'clear' },
+        { label: t('home.dueShow'), value: 'show', kind: 'primary' },
+      ],
+      dismissValue: null,
+    });
+    if (choice === 'show') {
+      homeState.dueOn = true;
+      homeState.dueDays = days;
+      homeState.dueMin = min;
+    } else if (choice === 'clear') {
+      homeState.dueOn = false;
+    } else return;
+    paint();
+  };
+
   const paintChips = (): void => {
     clear(chipRow);
-    const chip = (label: string, on: boolean, fn: () => void): HTMLElement =>
-      h('button', { class: `chip${on ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': on ? 'true' : 'false' }, on: { click: fn } }, label);
+    const chip = (label: string, on: boolean, fn: () => void, testid: string): HTMLElement =>
+      h('button', { class: `chip${on ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': on ? 'true' : 'false', 'data-testid': testid }, on: { click: fn } }, label);
     chipRow.append(
-      chip(t('home.sortRecent'), homeState.sort === 'recent', () => { homeState.sort = 'recent'; paint(); }),
-      chip(t('home.sortDue'), homeState.sort === 'due', () => { homeState.sort = 'due'; paint(); }),
-      chip(t('home.sortOldest'), homeState.sort === 'oldest', () => { homeState.sort = 'oldest'; paint(); }),
-      chip(t('home.filter30'), homeState.late, () => { homeState.late = !homeState.late; paint(); }),
+      chip(t('home.sortRecent'), homeState.sort === 'recent', () => { homeState.sort = 'recent'; paint(); }, 'sort-recent'),
+      chip(t('home.sortDue'), homeState.sort === 'due', () => { homeState.sort = 'due'; paint(); }, 'sort-due'),
+      chip(t('home.sortOldest'), homeState.sort === 'oldest', () => { homeState.sort = 'oldest'; paint(); }, 'sort-oldest'),
+      h(
+        'button',
+        { class: `chip chip-filter${homeState.dueOn ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': homeState.dueOn ? 'true' : 'false', 'data-testid': 'due-list' }, on: { click: () => void openDueSheet() } },
+        icon('filter', 'ic-sm'),
+        homeState.dueOn ? t('home.dueListOn', { what: dueWhat() }) : t('home.dueList'),
+      ),
     );
   };
 
@@ -148,59 +213,71 @@ export const homeScreen: Screen = async (root, route) => {
     clear(list);
     const q = homeState.q.trim();
     let shown = rows.filter((r) => matchesQuery(keys.get(r.id) ?? '', q));
-    if (homeState.late) shown = shown.filter((r) => r.balance_paise > 0 && (r.days_since ?? 0) >= 30);
+    if (homeState.dueOn) {
+      shown = shown.filter((r) => r.balance_paise > 0 && r.balance_paise >= homeState.dueMin && (r.days_since ?? 0) >= homeState.dueDays);
+    }
     shown = sortRows(shown, homeState.sort);
     const frag = document.createDocumentFragment();
+    for (const r of shown) frag.appendChild(customerRow(r, s.paired));
+    // "Add as new" only AFTER the matches (the thumb lands on the first row while typing), and only as a
+    // secondary row when something matched.
     if (q && !rows.some((r) => normName(r.name) === normName(q))) {
       frag.appendChild(
         h(
           'button',
-          { class: 'cust-row add-row', attrs: { type: 'button', 'data-testid': 'add-as-new' }, on: { click: () => void router.go('customer-edit', { name: q }) } },
+          { class: `cust-row add-row${shown.length ? ' secondary' : ''}`, attrs: { type: 'button', 'data-testid': 'add-as-new' }, on: { click: () => void router.go('customer-edit', { name: q }) } },
           icon('plus'),
           h('span', { class: 'cust-main', text: t('home.addAs', { q }) }),
         ),
       );
     }
-    for (const r of shown) frag.appendChild(customerRow(r, s.paired));
     list.appendChild(frag);
     list.classList.toggle('hidden', !list.firstChild);
+    if (homeState.dueOn && shown.length) {
+      const sum = shown.reduce((a, r) => a + r.balance_paise, 0);
+      dueLine.textContent = shown.length === 1 ? t('home.dueTotalOne', { amount: formatINR(sum) }) : t('home.dueTotal', { n: shown.length, amount: formatINR(sum) });
+      dueLine.classList.remove('hidden');
+    } else dueLine.classList.add('hidden');
     emptyEl.classList.toggle('hidden', shown.length > 0);
-    emptyEl.textContent = rows.length === 0 ? t('home.empty') : homeState.late && !q ? t('home.none30') : t('home.noMatch', { q });
-    if (shown.length === 0 && q && list.firstChild) emptyEl.classList.add('hidden');
+    emptyEl.textContent = rows.length === 0
+      ? t('home.empty')
+      : homeState.dueOn && !q
+        ? homeState.dueDays && !homeState.dueMin ? t('home.noneDays', { n: homeState.dueDays }) : t('home.dueNone')
+        : t('home.noMatch', { q });
+    if (shown.length === 0 && q && list.firstChild) {
+      // Only the "add as new" row: say why first, then offer it.
+      emptyEl.classList.remove('hidden');
+      emptyEl.classList.add('empty-tight');
+    } else emptyEl.classList.remove('empty-tight');
   };
-
-  input.addEventListener('input', () => {
-    homeState.q = input.value;
-    paint();
-  });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') void app.platform.hideKeyboard();
-  });
 
   add(
     body,
     summary,
     banners,
-    rows.length > 0 || homeState.q ? h('div', 'search-wrap', icon('search'), input) : null,
+    rows.length > 0 || homeState.q ? search.el : null,
     rows.length > 0 ? chipRow : null,
-    list,
+    dueLine,
     emptyEl,
+    list,
   );
   paint();
 
-  // ---- bottom bar
+  // ---- bottom bar + floating "+ Customer"
+  body.classList.add('pad-fab');
   const bar = h(
     'nav',
     'bottom-bar',
-    h('button', { class: 'nav-btn', attrs: { type: 'button', 'data-testid': 'nav-daybook' }, on: { click: () => void router.go('daybook') } }, icon('book'), t('home.dayBook')),
-    h(
-      'button',
-      { class: 'nav-add', attrs: { type: 'button', 'data-testid': 'add-customer' }, on: { click: () => void router.go('customer-edit', homeState.q.trim() ? { name: homeState.q.trim() } : {}) } },
-      icon('plus'),
-      t('home.addCustomer'),
-    ),
-    h('button', { class: 'nav-btn', attrs: { type: 'button', 'data-testid': 'nav-settings' }, on: { click: () => void router.go('settings') } }, icon('gear'), t('home.settings')),
+    h('button', { class: 'nav-btn', attrs: { type: 'button', 'data-testid': 'nav-daybook' }, on: { click: () => void router.go('daybook') } }, icon('book'), h('span', { text: t('home.dayBook') })),
+    h('button', { class: 'nav-btn', attrs: { type: 'button', 'data-testid': 'nav-settings' }, on: { click: () => void router.go('settings') } }, icon('gear'), h('span', { text: t('home.settings') })),
   );
+  const fab = h(
+    'button',
+    { class: 'fab', attrs: { type: 'button', 'data-testid': 'add-customer' }, on: { click: () => void router.go('customer-edit', homeState.q.trim() ? { name: homeState.q.trim() } : {}) } },
+    icon('plus'),
+    h('span', { text: t('home.addCustomer') }),
+  );
+  root.append(fab);
   root.appendChild(bar);
   return () => pill.dispose();
 };

@@ -72,15 +72,26 @@ function dayRow(r: DayBookRow, byId: Map<string, DayBookRow>): HTMLElement {
   const meta = [kindText];
   if (r.kind === 'RECEIVE' && r.mode && !struck) meta.push(modeLabel(r.mode));
   if (r.note) meta.push(r.note);
+  // The typed time only means something when the slip was typed on its own date. A back-dated slip on the
+  // business tab shows "typed 14 Oct" instead of today's time under 13 Oct.
+  const typedOn = bizDateIST(new Date(r.created_at));
+  const backDated = typedOn !== r.biz_date;
+  const showTime = tab === 'entered' || !backDated;
   return h(
     'button',
     { class: `day-row${struck ? ' struck' : ''}`, attrs: { type: 'button', 'data-testid': 'day-row', 'data-kind': r.kind }, on: { click: () => void router.go('customer', { id: r.customer_id }) } },
-    h('span', { class: 'day-time num', text: formatTimeIST(r.created_at) }),
+    h('span', { class: 'day-time num', text: showTime ? formatTimeIST(r.created_at) : '' }),
     h(
       'span',
       'entry-main',
-      h('span', { class: 'entry-kind', text: `${r.customer_name} · ${formatCode(r.customer_code)}` }),
-      h('span', 'entry-meta', h('span', { class: 'entry-kind-text', text: meta.join(' · ') }), r.device_name ? h('span', { class: 'badge badge-dev', text: r.device_name }) : null),
+      h('span', 'entry-kind', h('span', { class: 'day-name', text: r.customer_name }), ' ', h('span', { class: 'day-code', text: `· ${formatCode(r.customer_code)}` })),
+      h(
+        'span',
+        'entry-meta',
+        h('span', { class: 'entry-kind-text', text: meta.join(' · ') }),
+        r.device_name ? h('span', { class: 'badge badge-dev', text: r.device_name }) : null,
+        !showTime ? h('span', { class: 'badge', attrs: { 'data-testid': 'typed-on' }, text: t('day.enteredOn', { date: day(typedOn) }) }) : null,
+      ),
     ),
     h('span', 'entry-side', h('span', { class: `entry-amt amt ${tone}`, text: amountText }), tab === 'entered' && r.biz_date !== bizDateIST(new Date(r.created_at)) ? h('span', { class: 'entry-run', text: t('day.forDate', { date: day(r.biz_date) }) }) : null),
   );
@@ -148,23 +159,25 @@ export const dayBookScreen: Screen = async (root, route) => {
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
   const list = h('div', { class: 'list', attrs: { 'data-testid': 'day-list' } });
+  let shownCount = 0;
   for (const r of rows) {
     if (r.kind === 'REVERSAL' && r.reverses_entry_id && byId.has(r.reverses_entry_id)) continue;
     list.appendChild(dayRow(r, byId));
+    shownCount++;
   }
   const monthName = (getLang() === 'ta' ? MONTHS_TA : MONTHS_EN)[Number(date.slice(5, 7)) - 1];
   body.append(
     nav,
     seg,
     grid,
-    h('div', 'list-head', h('h2', { class: 'section-title', text: t('day.entries', { n: tot.entry_count }) })),
+    h('div', 'list-head', h('h2', { class: 'section-title', text: shownCount === 1 ? t('day.entriesOne') : t('day.entries', { n: shownCount }) })),
     rows.length ? list : h('div', { class: 'empty', text: t('day.none') }),
     h('p', { class: 'month-line', attrs: { 'data-testid': 'month-line' }, text: t('day.month', { month: `${monthName} ${date.slice(0, 4)}`, given: formatINR(month.given_paise), received: formatINR(month.received_paise) }) }),
   );
   showFooter(
     footer,
     button(
-      h('span', null, icon('bolt'), t('day.quick')),
+      [icon('bolt'), t('day.quick')],
       () => {
         startQuick(date === todayStr ? null : date);
         void router.go('quick');

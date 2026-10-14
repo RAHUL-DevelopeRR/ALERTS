@@ -530,7 +530,9 @@ export class FakePlatform {
     return true;
   }
   async shareText(): Promise<void> {}
-  async shareFile(): Promise<void> {}
+  async shareFile(): Promise<boolean> {
+    return true;
+  }
   async copyText(): Promise<void> {}
   async writePrivateFile(name: string, content: string): Promise<void> {
     this.files.set(name, content);

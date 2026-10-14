@@ -84,6 +84,21 @@ CREATE TABLE devices (
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 `,
   },
+  {
+    // v2: customers.server_row = JSON of the last customer content the current server accepted, so a refused
+    // UPDATE (ARCHIVE_NONZERO, FORBIDDEN_ROLE, ...) can put back what the server and the other phones hold.
+    // Also voids pending reversals whose original was already permanently rejected (they could never upload).
+    version: 2,
+    sql: `
+ALTER TABLE customers ADD COLUMN server_row TEXT;
+DELETE FROM outbox WHERE tbl = 'entries' AND row_id IN (
+  SELECT r.id FROM entries r JOIN entries o ON o.id = r.reverses_entry_id
+  WHERE r.kind = 'REVERSAL' AND r.sync_state = 'pending' AND o.sync_state = 'rejected');
+UPDATE entries SET sync_state = 'rejected', reject_reason = 'ORIGINAL_REJECTED'
+  WHERE kind = 'REVERSAL' AND sync_state = 'pending'
+    AND reverses_entry_id IN (SELECT id FROM entries WHERE sync_state = 'rejected');
+`,
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

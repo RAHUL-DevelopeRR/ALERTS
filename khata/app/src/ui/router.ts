@@ -5,7 +5,7 @@
  */
 import { clear, h } from './components/dom';
 import { errorText } from './errors';
-import { toast } from './components/overlay';
+import { hideActionToast, toast } from './components/overlay';
 
 export type RouteName =
   | 'home' | 'customer' | 'customer-edit' | 'entry' | 'daybook' | 'statement' | 'settings' | 'quick';
@@ -28,6 +28,21 @@ let hostEl: HTMLElement | null = null;
 let currentEl: HTMLElement | null = null;
 let cleanup: (() => void) | null = null;
 let token = 0;
+/**
+ * A screen may refuse a plain back (hardware back, top-bar back, Escape) while it holds unsaved input, e.g. the
+ * keypad with an amount typed. The guard returns true when it consumed the back (it then asks the user and calls
+ * back({ force: true }) itself). Cleared on every navigation.
+ */
+let leaveGuard: (() => boolean) | null = null;
+
+/** Install a guard for the current screen. Returns a remover that only clears it if it is still this guard
+ *  (a screen's cleanup runs after the next screen rendered and may already have set its own). */
+export function setLeaveGuard(fn: () => boolean): () => void {
+  leaveGuard = fn;
+  return () => {
+    if (leaveGuard === fn) leaveGuard = null;
+  };
+}
 
 export function registerScreen(name: RouteName, s: Screen): void {
   screens.set(name, s);
@@ -90,20 +105,27 @@ async function render(): Promise<void> {
 }
 
 export function go(name: RouteName, params: Record<string, string> = {}, state?: unknown): Promise<void> {
+  hideActionToast();
+  leaveGuard = null;
   saveScroll();
   stack.push({ name, params, state });
   return render();
 }
 
 export function replace(name: RouteName, params: Record<string, string> = {}, state?: unknown): Promise<void> {
+  hideActionToast();
+  leaveGuard = null;
   stack.pop();
   stack.push({ name, params, state });
   return render();
 }
 
 /** Pop one screen. Returns false on the root screen (nothing popped). */
-export function back(): boolean {
+export function back(opts: { force?: boolean } = {}): boolean {
   if (stack.length <= 1) return false;
+  if (!opts.force && leaveGuard && leaveGuard()) return true;
+  hideActionToast();
+  leaveGuard = null;
   stack.pop();
   void render();
   return true;
@@ -111,6 +133,8 @@ export function back(): boolean {
 
 /** Pop back to the nearest route named `name` (or reset to it). */
 export function backTo(name: RouteName, params?: Record<string, string>): Promise<void> {
+  hideActionToast();
+  leaveGuard = null;
   let i = stack.length - 1;
   while (i >= 0 && !(stack[i].name === name && (!params || Object.entries(params).every(([k, v]) => stack[i].params[k] === v)))) i--;
   if (i < 0) {
@@ -122,6 +146,8 @@ export function backTo(name: RouteName, params?: Record<string, string>): Promis
 }
 
 export function reset(name: RouteName = 'home', params: Record<string, string> = {}): Promise<void> {
+  hideActionToast();
+  leaveGuard = null;
   stack = [{ name, params }];
   return render();
 }

@@ -1,0 +1,6 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Debug builds install as live.zerox.kadankanakku.debug next to the real app; the label makes them easy to tell apart. -->
+<resources>
+    <string name="app_name">Kadan Kanakku DEBUG</string>
+    <string name="title_activity_main">Kadan Kanakku DEBUG</string>
+</resources>

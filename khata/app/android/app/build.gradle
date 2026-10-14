@@ -18,6 +18,10 @@ android {
         versionCode 1
         versionName "1.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        // The app ships Tamil and English only; drop the ~90 other locales AndroidX/AppCompat would bundle.
+        androidResources {
+            localeFilters += ['en', 'ta']
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
@@ -36,6 +40,16 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // A debug APK must never take the production ID: it is signed with a throwaway per-machine debug key,
+            // and once it sat on the shop phone under live.zerox.kadankanakku, every later release (or debug build
+            // from another machine) would fail with INSTALL_FAILED_UPDATE_INCOMPATIBLE and only an uninstall,
+            // which deletes the ledger, would get past it. With the suffix it installs as a separate app.
+            // ${applicationId}.fileprovider (manifest) and the Share plugin's getPackageName()+".fileprovider"
+            // both follow the suffix.
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
         release {
             // No R8: the app is a WebView shell and Capacitor plugins are found by reflection.
             minifyEnabled false

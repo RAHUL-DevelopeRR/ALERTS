@@ -4,7 +4,10 @@
  * Behaviour notes (from reading the plugins' Android sources in node_modules):
  * - AppLauncher.openUrl fires ACTION_VIEW and resolves {completed:false} when no app handles the URI (no <queries>
  *   needed because it calls startActivity directly). Rejections are mapped to false too.
- * - Share.share rejects with "Share canceled" when the user closes the sheet; that is not an error here.
+ * - Share.share rejects with "Share canceled" when the user closes the sheet (activity result RESULT_CANCELED while
+ *   our activity never stopped); shareText() treats that as a no-op and shareFile() resolves false, so callers such
+ *   as the backup copy do not record a share that never happened. Once a target app was opened (our activity
+ *   stopped) the plugin resolves, which shareFile() reports as true.
  *   Files must be file:// URIs under a FileProvider path: we write them to Directory.Cache/share/ and
  *   res/xml/file_paths.xml exposes exactly that folder. The MIME type is inferred natively from the file
  *   extension, so shareFile() makes sure the name carries the extension matching `mimeType`.
@@ -185,8 +188,10 @@ export function createNativePlatform(): Platform {
       });
       try {
         await Share.share(title ? { files: [uri], title, dialogTitle: title } : { files: [uri] });
+        return true;
       } catch (e) {
-        if (!isShareCancel(e)) throw e;
+        if (isShareCancel(e)) return false;
+        throw e;
       }
     },
 

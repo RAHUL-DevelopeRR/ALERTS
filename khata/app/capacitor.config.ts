@@ -25,10 +25,16 @@ const config: CapacitorConfig = {
   appName: 'Kadan Kanakku',
   webDir: 'dist',
   android: {
-    // Older system WebViews cannot run the bundle; Capacitor shows a clear error page below this version.
+    // The bundle targets chrome80 (vite.config.ts). Below this System WebView version Capacitor loads
+    // server.errorPath instead of the app (Bridge.java); without errorPath it would only log and show a blank page.
     minWebViewVersion: 80,
     allowMixedContent: false,
-    captureInput: true,
+    // captureInput is deliberately NOT set: it swaps the WebView's InputConnection for a TYPE_NULL dummy, which
+    // breaks Tamil IMEs (text appended via JS with no `input` event, no composing) and ignores type=tel/inputmode.
+  },
+  server: {
+    // Plain ES5 page in public/ (Tamil + English): "update Android System WebView from the Play Store".
+    errorPath: 'webview-old.html',
   },
   plugins: {
     // Route fetch() through the native HTTP stack so the WebView's CORS rules never apply to sync calls.

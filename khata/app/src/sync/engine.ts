@@ -45,8 +45,6 @@ export const CLOCK_SKEW_LIMIT_MS = 10 * 60_000;
 const MAX_ROUNDS = 4;
 /** Max consecutive pushes that changed nothing (only retriable rows left) before the push phase stops. */
 const MAX_IDLE_PUSHES = 2;
-/** Upper bound of rows read when saving unsynced rows before a wipe (far above any real outbox). */
-const UNSYNCED_MAX_ROWS = 1_000_000;
 /** Safety cap on pull pages per cycle (500 rows each). */
 const MAX_PULL_PAGES = 10_000;
 
@@ -294,7 +292,7 @@ export class Engine implements SyncEngine {
       const page = await api.pull(since, PULL_PAGE_SIZE);
       this.trackClock(page.server_time);
       if (await this.epochChanged(page.sync_epoch)) return 'epoch';
-      await this.repo.applyPullPage(page);
+      await this.repo.applyPullPage(page, since); // ignored if a restore/requeue reset the cursor meanwhile
       if (!page.has_more || page.next_since <= since) return 'done';
     }
     return 'done';
@@ -405,12 +403,14 @@ export class Engine implements SyncEngine {
   /** Writes the still-unsynced rows to a private file. Returns false if they could not be saved. */
   private async saveUnsynced(): Promise<boolean> {
     try {
-      const batch = await this.repo.outboxBatch(UNSYNCED_MAX_ROWS);
+      // Every row that exists on no server (also the ones the push skips: entries under a never-accepted
+      // rejected customer, void reversals of a refused original, the refused rows themselves).
+      const rows = await this.repo.unsyncedRows();
       const attention = await this.repo.needsAttention();
-      if (batch.customers.length + batch.entries.length + attention.length === 0) return true;
-      const customers = [...batch.customers];
+      if (rows.customers.length + rows.entries.length + attention.length === 0) return true;
+      const customers = [...rows.customers];
       const have = new Set(customers.map((c) => c.id));
-      const wanted = [...batch.entries.map((e) => e.customer_id), ...attention.map((a) => a.customer_id)];
+      const wanted = [...rows.entries.map((e) => e.customer_id), ...attention.map((a) => a.customer_id)];
       for (const id of wanted) {
         if (have.has(id)) continue;
         const c = await this.repo.getCustomer(id);
@@ -424,7 +424,7 @@ export class Engine implements SyncEngine {
         exported_at: now,
         shop_name: (await this.repo.getMeta('shop_name')) ?? '',
         customers,
-        entries: batch.entries,
+        entries: rows.entries,
         unsynced: true,
         needs_attention: attention.map((a) => ({ tbl: a.tbl, id: a.id, reason: a.reason, summary: a.summary })),
       };

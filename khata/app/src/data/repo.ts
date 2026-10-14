@@ -11,6 +11,12 @@
  *    still exists on the server, so it stays visible with the has_rejected badge.
  *  - Every local write enqueues an outbox row, paired or not (unpaired phones push it all after /pair).
  *  - Rejected rows the user dismissed keep sync_state='rejected' with reject_reason 'DISCARDED:<reason>'.
+ *  - A pending REVERSAL whose original is permanently rejected is void: it is marked rejected with reason
+ *    'ORIGINAL_REJECTED' (hidden like ALREADY_REVERSED) and comes back if the original is resent or accepted.
+ *  - customers.server_row holds the last content the current server accepted; a refused customer UPDATE
+ *    restores it so this phone keeps showing what the server and the other phones hold.
+ *  - Requeue (epoch change, "Re-upload everything", restore, re-pairing with another server) never puts an
+ *    actively rejected row back into the balances.
  */
 import {
   RETRIABLE_REASONS,
@@ -83,10 +89,44 @@ const ENTRY_COLS =
 
 /** SQL condition on alias `c`: customer is visible in home/totals (not a never-accepted rejected row). */
 const CUST_VISIBLE = `NOT (c.sync_state = 'rejected' AND c.server_seq IS NULL)`;
-/** SQL condition (unqualified columns): a rejected row the user still has to look at. */
-const ACTIVE_REJECT = `sync_state = 'rejected' AND COALESCE(reject_reason, '') <> 'ALREADY_REVERSED' AND COALESCE(reject_reason, '') NOT LIKE 'DISCARDED%'`;
-/** Rows that requeue/import put back to pending: everything except hidden duplicates and dismissed rows. */
-const REQUEUE_COND = `NOT (sync_state = 'rejected' AND (COALESCE(reject_reason, '') = 'ALREADY_REVERSED' OR COALESCE(reject_reason, '') LIKE 'DISCARDED%'))`;
+/** reject_reason of a pending reversal voided because its original was permanently rejected. */
+export const ORIGINAL_REJECTED = 'ORIGINAL_REJECTED';
+/** SQL condition on alias `x`: a rejected row the user still has to look at (not hidden, not dismissed). */
+const activeReject = (x: string): string =>
+  `${x}.sync_state = 'rejected' AND COALESCE(${x}.reject_reason, '') NOT IN ('ALREADY_REVERSED', '${ORIGINAL_REJECTED}')
+   AND COALESCE(${x}.reject_reason, '') NOT LIKE 'DISCARDED%'`;
+/** Customers that requeue puts back to pending: every row except a never-accepted rejected one (it stays under
+ *  Needs attention; resend it there). A refused update of an accepted customer already shows server content. */
+const REQUEUE_CUST = `NOT (sync_state = 'rejected' AND server_seq IS NULL)`;
+/** Entries that requeue puts back to pending: never a rejected one, so a refused amount does not count again. */
+const REQUEUE_ENTRY = `sync_state <> 'rejected'`;
+/** SQL condition on entries alias `e`: the entry counts in shop-wide figures (home, totals, day book, month).
+ *  Per-customer views (balance, statement) use only `sync_state <> 'rejected'`. */
+const SHOP_COUNTED = `e.sync_state <> 'rejected'
+  AND EXISTS (SELECT 1 FROM customers c WHERE c.id = e.customer_id AND ${CUST_VISIBLE})`;
+
+const CUSTOMER_ROW_KEYS = [
+  'id', 'code', 'name', 'search_name', 'phone', 'note', 'archived_at', 'erased_at', 'created_at', 'updated_at',
+  'updated_by', 'received_at',
+] as const;
+
+/** Parse customers.server_row; null when absent or unusable. */
+function parseServerRow(v: unknown, id: string): CustomerRow | null {
+  if (typeof v !== 'string' || !v) return null;
+  try {
+    const o = JSON.parse(v) as Partial<CustomerRow>;
+    if (!o || o.id !== id || !Number.isSafeInteger(o.code) || typeof o.name !== 'string' || !o.name) return null;
+    return o as CustomerRow;
+  } catch {
+    return null;
+  }
+}
+
+function serverRowJson(r: CustomerRow): string {
+  const o: Record<string, unknown> = {};
+  for (const k of CUSTOMER_ROW_KEYS) o[k] = r[k] ?? null;
+  return JSON.stringify(o);
+}
 
 const KINDS: readonly EntryKind[] = ['GIVE', 'RECEIVE', 'WRITEOFF', 'REVERSAL'];
 const MODES: readonly PayMode[] = ['CASH', 'UPI', 'OTHER'];
@@ -238,6 +278,12 @@ export class SqlRepo implements Repo {
   /** Highest outbox `n` per row (`tbl:id`) handed out by the last outboxBatch(), so an edit queued while a push
    *  is in flight is not deleted by applyPushResults(). */
   private readonly batchMaxN = new Map<string, number>();
+  /** Customer content handed out by the last outboxBatch() (what the server stores if it accepts the row). */
+  private readonly batchCust = new Map<string, CustomerRow>();
+  /** Bumped whenever the local ledger is rebuilt or re-queued (restore, requeue, epoch change, unpair). A push
+   *  batch read before that is stale: its results are ignored and the rows are simply pushed again. */
+  private generation = 0;
+  private batchGeneration = 0;
 
   constructor(private readonly db: Db, opts: SqlRepoOptions = {}) {
     this.now = opts.now ?? (() => new Date());
@@ -419,14 +465,13 @@ export class SqlRepo implements Repo {
                      MIN(CASE WHEN e.kind = 'GIVE' AND e.id NOT IN (SELECT id FROM rev) THEN e.biz_date END) AS first_give,
                      MAX(CASE WHEN e.sync_state = 'pending' THEN 1 ELSE 0 END) AS e_pending
               FROM live e GROUP BY e.customer_id),
-            rej AS (SELECT customer_id, 1 AS r FROM entries WHERE ${ACTIVE_REJECT} GROUP BY customer_id)
+            rej AS (SELECT x.customer_id AS customer_id, 1 AS r FROM entries x WHERE ${activeReject('x')} GROUP BY x.customer_id)
        SELECT c.id AS id, c.code AS code, c.name AS name, c.search_name AS search_name, c.phone AS phone,
               c.note AS note, c.archived_at AS archived_at, c.erased_at AS erased_at,
               COALESCE(a.balance_paise, 0) AS balance_paise, a.last_activity AS last_activity,
               a.last_payment AS last_payment, a.first_give AS first_give,
               CASE WHEN c.sync_state = 'pending' OR COALESCE(a.e_pending, 0) = 1 THEN 1 ELSE 0 END AS has_pending,
-              CASE WHEN (c.sync_state = 'rejected' AND COALESCE(c.reject_reason, '') NOT LIKE 'DISCARDED%')
-                        OR r.r = 1 THEN 1 ELSE 0 END AS has_rejected
+              CASE WHEN (${activeReject('c')}) OR r.r = 1 THEN 1 ELSE 0 END AS has_rejected
        FROM customers c
        LEFT JOIN agg a ON a.customer_id = c.id
        LEFT JOIN rej r ON r.customer_id = c.id
@@ -618,6 +663,8 @@ export class SqlRepo implements Repo {
 
   async unarchiveCustomer(id: string): Promise<Customer> {
     return this.db.transaction(async (tx) => {
+      // The server refuses an archive change from staff (FORBIDDEN_ROLE), same as archiveCustomer.
+      if ((await this.role(tx)) !== 'owner') throw new RepoError('OWNER_ONLY');
       const c = await this.customerTx(tx, id);
       if (!c) throw new RepoError('NOT_FOUND');
       if (!c.archived_at) return c;
@@ -632,9 +679,11 @@ export class SqlRepo implements Repo {
       if (serverRow) {
         await tx.run(
           `UPDATE customers SET code = ?, name = ?, search_name = ?, phone = ?, note = ?, archived_at = ?, erased_at = ?,
-                  updated_at = ?, updated_by = ?, received_at = ?, sync_state = 'accepted', reject_reason = NULL WHERE id = ?`,
+                  updated_at = ?, updated_by = ?, received_at = ?, sync_state = 'accepted', reject_reason = NULL,
+                  server_row = ? WHERE id = ?`,
           [serverRow.code, serverRow.name, serverRow.search_name, serverRow.phone, serverRow.note, serverRow.archived_at,
-            serverRow.erased_at ?? this.nowIso(), serverRow.updated_at, serverRow.updated_by, serverRow.received_at ?? null, id],
+            serverRow.erased_at ?? this.nowIso(), serverRow.updated_at, serverRow.updated_by, serverRow.received_at ?? null,
+            serverRowJson({ ...serverRow, id, erased_at: serverRow.erased_at ?? this.nowIso() }), id],
         );
         await tx.run(`DELETE FROM outbox WHERE tbl = 'customers' AND row_id = ?`, [id]);
       } else {
@@ -665,47 +714,68 @@ export class SqlRepo implements Repo {
 
   async addEntry(input: NewEntryInput): Promise<{ entry: Entry; balance_paise: number }> {
     if (!['GIVE', 'RECEIVE', 'WRITEOFF'].includes(input.kind)) throw new RepoError('BAD_ROW', 'kind');
-    return this.db.transaction(async (tx) => {
-      const c = await this.customerTx(tx, input.customer_id);
-      if (!c) throw new RepoError('NOT_FOUND');
-      if (input.kind === 'WRITEOFF' && (await this.role(tx)) !== 'owner') throw new RepoError('OWNER_ONLY');
-      const device = await this.deviceId(tx);
-      const today = await this.today(tx);
-      const mode = input.mode && MODES.includes(input.mode) ? input.mode : null;
-      const draft = ledger(() =>
-        makeEntry({
-          customer_id: c.id, kind: input.kind, amount_paise: input.amount_paise, biz_date: input.biz_date,
-          note: input.note, mode, device_id: device, today, now: this.now(),
-        }),
-      );
-      const entry: Entry = { ...draft, received_at: null, server_seq: null, sync_state: 'pending', reject_reason: null };
-      await this.insertEntry(tx, entry);
-      await this.enqueue(tx, 'entries', entry.id);
-      if (c.archived_at) {
-        // Money for an archived customer brings them back (the server does the same when it accepts the entry).
-        await tx.run('UPDATE customers SET archived_at = NULL WHERE id = ?', [c.id]);
-      }
-      return { entry, balance_paise: await this.balanceTx(tx, c.id) };
-    });
+    return this.db.transaction((tx) => this.addEntryTx(tx, input));
+  }
+
+  /** Body of addEntry inside the caller's transaction. */
+  private async addEntryTx(tx: DbExec, input: NewEntryInput): Promise<{ entry: Entry; balance_paise: number }> {
+    const c = await this.customerTx(tx, input.customer_id);
+    if (!c) throw new RepoError('NOT_FOUND');
+    if (input.kind === 'WRITEOFF' && (await this.role(tx)) !== 'owner') throw new RepoError('OWNER_ONLY');
+    const device = await this.deviceId(tx);
+    const today = await this.today(tx);
+    const mode = input.mode && MODES.includes(input.mode) ? input.mode : null;
+    const draft = ledger(() =>
+      makeEntry({
+        customer_id: c.id, kind: input.kind, amount_paise: input.amount_paise, biz_date: input.biz_date,
+        note: input.note, mode, device_id: device, today, now: this.now(),
+      }),
+    );
+    const entry: Entry = { ...draft, received_at: null, server_seq: null, sync_state: 'pending', reject_reason: null };
+    await this.insertEntry(tx, entry);
+    await this.enqueue(tx, 'entries', entry.id);
+    if (c.archived_at) {
+      // Money for an archived customer brings them back (the server does the same when it accepts the entry).
+      await tx.run('UPDATE customers SET archived_at = NULL WHERE id = ?', [c.id]);
+    }
+    return { entry, balance_paise: await this.balanceTx(tx, c.id) };
   }
 
   async reverseEntry(entryId: string, note?: string | null): Promise<{ reversal: Entry; balance_paise: number }> {
+    return this.db.transaction((tx) => this.reverseEntryTx(tx, entryId, note));
+  }
+
+  /** Body of reverseEntry inside the caller's transaction. */
+  private async reverseEntryTx(tx: DbExec, entryId: string, note?: string | null): Promise<{ reversal: Entry; balance_paise: number }> {
+    const orig = await this.entryTx(tx, entryId);
+    if (!orig) throw new RepoError('NOT_FOUND');
+    if (orig.kind === 'REVERSAL') throw new RepoError('CANNOT_REVERSE_REVERSAL');
+    if (orig.sync_state === 'rejected') throw new RepoError('REJECTED');
+    const existing = await tx.query(
+      `SELECT id FROM entries WHERE reverses_entry_id = ? AND sync_state <> 'rejected' LIMIT 1`,
+      [entryId],
+    );
+    if (existing.length) throw new RepoError('ALREADY_REVERSED');
+    const device = await this.deviceId(tx);
+    const draft = ledger(() => makeReversal(orig, device, note, this.now()));
+    const reversal: Entry = { ...draft, received_at: null, server_seq: null, sync_state: 'pending', reject_reason: null };
+    await this.insertEntry(tx, reversal);
+    await this.enqueue(tx, 'entries', reversal.id);
+    return { reversal, balance_paise: await this.balanceTx(tx, orig.customer_id) };
+  }
+
+  async correctEntry(
+    origId: string,
+    input: NewEntryInput,
+  ): Promise<{ reversal: Entry; entry: Entry; balance_paise: number }> {
+    if (!['GIVE', 'RECEIVE', 'WRITEOFF'].includes(input.kind)) throw new RepoError('BAD_ROW', 'kind');
     return this.db.transaction(async (tx) => {
-      const orig = await this.entryTx(tx, entryId);
+      const orig = await this.entryTx(tx, origId);
       if (!orig) throw new RepoError('NOT_FOUND');
-      if (orig.kind === 'REVERSAL') throw new RepoError('CANNOT_REVERSE_REVERSAL');
-      if (orig.sync_state === 'rejected') throw new RepoError('REJECTED');
-      const existing = await tx.query(
-        `SELECT id FROM entries WHERE reverses_entry_id = ? AND sync_state <> 'rejected' LIMIT 1`,
-        [entryId],
-      );
-      if (existing.length) throw new RepoError('ALREADY_REVERSED');
-      const device = await this.deviceId(tx);
-      const draft = ledger(() => makeReversal(orig, device, note, this.now()));
-      const reversal: Entry = { ...draft, received_at: null, server_seq: null, sync_state: 'pending', reject_reason: null };
-      await this.insertEntry(tx, reversal);
-      await this.enqueue(tx, 'entries', reversal.id);
-      return { reversal, balance_paise: await this.balanceTx(tx, orig.customer_id) };
+      if (orig.customer_id !== input.customer_id) throw new RepoError('BAD_ROW', 'customer_id');
+      const { reversal } = await this.reverseEntryTx(tx, origId);
+      const { entry, balance_paise } = await this.addEntryTx(tx, input);
+      return { reversal, entry, balance_paise };
     });
   }
 
@@ -772,7 +842,11 @@ export class SqlRepo implements Repo {
         [customerId],
       );
       const p = defaultPeriod(rows.map((r) => ({ biz_date: s(r.biz_date), delta_paise: n(r.delta_paise) })), today);
-      return { from: p.from, to: p.to, kind: p.kind };
+      // The server accepts biz_date up to IST today + 1 (a phone whose clock runs a little fast just before
+      // midnight). An open period must still close at the balance on screen, so it runs to the latest entry.
+      const last = rows.length ? s(rows[rows.length - 1].biz_date) : today;
+      const to = p.kind === 'since_zero' && last > p.to ? last : p.to;
+      return { from: p.from, to, kind: p.kind };
     });
   }
 
@@ -807,7 +881,7 @@ export class SqlRepo implements Repo {
   /** Day-book style totals over counted entries matching `cond` (unqualified entries columns). */
   private async totalsWhere(x: DbExec, label: string, cond: string, params: SqlValue[]): Promise<DayBookTotals> {
     const [r] = await x.query(
-      `WITH live AS (SELECT * FROM entries WHERE ${cond} AND sync_state <> 'rejected'),
+      `WITH live AS (SELECT e.* FROM entries e WHERE ${cond} AND ${SHOP_COUNTED}),
             rev AS (SELECT reverses_entry_id AS id FROM entries
                     WHERE reverses_entry_id IS NOT NULL AND sync_state <> 'rejected'),
             t AS (SELECT live.*, CASE WHEN live.id IN (SELECT id FROM rev) THEN 1 ELSE 0 END AS reversed FROM live)
@@ -845,7 +919,7 @@ export class SqlRepo implements Repo {
               CASE WHEN EXISTS (SELECT 1 FROM entries r WHERE r.reverses_entry_id = e.id AND r.sync_state <> 'rejected')
                    THEN 1 ELSE 0 END AS is_reversed
        FROM entries e JOIN customers c ON c.id = e.customer_id LEFT JOIN devices d ON d.id = e.device_id
-       WHERE ${cond} AND e.sync_state <> 'rejected'
+       WHERE ${cond} AND e.sync_state <> 'rejected' AND ${CUST_VISIBLE}
        ORDER BY e.created_at, e.id`,
       params,
     );
@@ -920,26 +994,133 @@ export class SqlRepo implements Repo {
           [left],
         )
         : [];
+      this.batchGeneration = this.generation;
+      const customers = cRows.map((r) => customerWire(toCustomer(r)));
       for (const r of cRows) this.batchMaxN.set(`customers:${s(r.id)}`, n(r.max_n));
       for (const r of eRows) this.batchMaxN.set(`entries:${s(r.id)}`, n(r.max_n));
+      for (const c of customers) this.batchCust.set(c.id, c);
       return {
-        customers: cRows.map((r) => customerWire(toCustomer(r))),
+        customers,
         entries: eRows.map((r) => entryWire(toEntry(r))),
       };
     });
   }
 
+  async unsyncedRows(): Promise<OutboxBatch> {
+    // Pending/outboxed rows, and rejected rows that are neither hidden duplicates nor dismissed by the user.
+    const kept = (x: string, tbl: 'customers' | 'entries'): string =>
+      `(${x}.sync_state = 'pending'
+        OR EXISTS (SELECT 1 FROM outbox ob WHERE ob.tbl = '${tbl}' AND ob.row_id = ${x}.id)
+        OR (${x}.sync_state = 'rejected' AND COALESCE(${x}.reject_reason, '') <> 'ALREADY_REVERSED'
+            AND COALESCE(${x}.reject_reason, '') NOT LIKE 'DISCARDED%'))`;
+    // A never-accepted customer the user dismissed is gone from every list, with its entries (as in exportTx).
+    const dismissed = (c: string): string =>
+      `(${c}.sync_state = 'rejected' AND ${c}.server_seq IS NULL AND COALESCE(${c}.reject_reason, '') LIKE 'DISCARDED%')`;
+    // A voided reversal of a dismissed original stays void.
+    const entryWhere = (e: string, c: string): string =>
+      `${kept(e, 'entries')} AND NOT ${dismissed(c)}
+       AND NOT (COALESCE(${e}.reject_reason, '') = '${ORIGINAL_REJECTED}' AND EXISTS (
+         SELECT 1 FROM entries o WHERE o.id = ${e}.reverses_entry_id AND COALESCE(o.reject_reason, '') LIKE 'DISCARDED%'))`;
+    return this.db.transaction(async (tx) => {
+      const eRows = await tx.query(
+        `SELECT ${ENTRY_COLS.split(', ').map((c) => `e.${c} AS ${c}`).join(', ')}
+         FROM entries e JOIN customers c ON c.id = e.customer_id
+         WHERE ${entryWhere('e', 'c')}
+         ORDER BY e.created_at, e.id`,
+      );
+      const cRows = await tx.query(
+        `SELECT ${CUST_COLS.split(', ').map((c) => `c.${c} AS ${c}`).join(', ')} FROM customers c
+         WHERE NOT ${dismissed('c')} AND (${kept('c', 'customers')} OR c.id IN (
+           SELECT e2.customer_id FROM entries e2 JOIN customers c2 ON c2.id = e2.customer_id WHERE ${entryWhere('e2', 'c2')}))
+         ORDER BY c.code, c.created_at, c.id`,
+      );
+      return { customers: cRows.map((r) => customerWire(toCustomer(r))), entries: eRows.map((r) => entryWire(toEntry(r))) };
+    });
+  }
+
+  /** A pending reversal of `origId` can never be stored once the original is permanently rejected: void it. */
+  private async voidReversalsTx(tx: DbExec, origId: string): Promise<void> {
+    const revs = await tx.query<{ id: string }>(
+      `SELECT id FROM entries WHERE reverses_entry_id = ? AND kind = 'REVERSAL' AND sync_state = 'pending'`,
+      [origId],
+    );
+    for (const r of revs) {
+      await tx.run(`UPDATE entries SET sync_state = 'rejected', reject_reason = ? WHERE id = ?`, [ORIGINAL_REJECTED, r.id]);
+      await tx.run(`DELETE FROM outbox WHERE tbl = 'entries' AND row_id = ?`, [r.id]);
+      this.batchMaxN.delete(`entries:${r.id}`);
+    }
+  }
+
+  /** The original is pending or accepted again: its voided reversal counts again and is queued after it
+   *  (or is hidden as a duplicate when another reversal of it already counts). */
+  private async reviveReversalsTx(tx: DbExec, origId: string): Promise<void> {
+    const revs = await tx.query<{ id: string }>(
+      `SELECT id FROM entries WHERE reverses_entry_id = ? AND sync_state = 'rejected' AND reject_reason = ?
+       ORDER BY created_at, id`,
+      [origId, ORIGINAL_REJECTED],
+    );
+    for (const r of revs) {
+      const counted = await tx.query(
+        `SELECT 1 AS x FROM entries WHERE reverses_entry_id = ? AND sync_state <> 'rejected' LIMIT 1`,
+        [origId],
+      );
+      if (counted.length) {
+        await tx.run(`UPDATE entries SET reject_reason = 'ALREADY_REVERSED' WHERE id = ?`, [r.id]);
+        continue;
+      }
+      await tx.run(`UPDATE entries SET sync_state = 'pending', reject_reason = NULL WHERE id = ?`, [r.id]);
+      await this.enqueue(tx, 'entries', r.id);
+    }
+  }
+
+  /** A permanently refused customer UPDATE: put back the content the server holds (kept in server_row), so this
+   *  phone agrees with the server and the other phones. The row stays 'rejected' for Needs attention. */
+  private async restoreServerCustomerTx(tx: DbExec, id: string, reason: string): Promise<boolean> {
+    const [r] = await tx.query(`SELECT server_seq, server_row FROM customers WHERE id = ?`, [id]);
+    if (!r || r.server_seq == null) return false;
+    const row = parseServerRow(r.server_row, id);
+    if (row) {
+      await tx.run(
+        `UPDATE customers SET code = ?, name = ?, search_name = ?, phone = ?, note = ?, archived_at = ?, erased_at = ?,
+                updated_at = ?, updated_by = ?, received_at = ?, sync_state = 'rejected', reject_reason = ? WHERE id = ?`,
+        [row.code, row.name, row.search_name ?? null, row.phone ?? null, row.note ?? null, row.archived_at ?? null,
+          row.erased_at ?? null, row.updated_at, row.updated_by, row.received_at ?? null, reason, id],
+      );
+      return true;
+    }
+    if (reason === 'ARCHIVE_NONZERO') {
+      // No copy of the server content (older data): at least undo the refused archive.
+      await tx.run(`UPDATE customers SET archived_at = NULL WHERE id = ?`, [id]);
+    }
+    return false;
+  }
+
   async applyPushResults(results: PushResult[], serverTime: string): Promise<{ accepted: number; rejected: number; retry: number }> {
     const counts = { accepted: 0, rejected: 0, retry: 0 };
+    if (this.batchGeneration !== this.generation) {
+      // The ledger was rebuilt or re-queued after this batch was read: the rows are queued again anyway, and
+      // results for the old content must not mark the new content accepted or rejected.
+      this.batchGeneration = this.generation;
+      return counts;
+    }
     await this.db.transaction(async (tx) => {
       for (const res of results) {
         const tbl = res.tbl === 'customers' ? 'customers' : res.tbl === 'entries' ? 'entries' : null;
         if (!tbl) continue;
-        const exists = await tx.query(`SELECT sync_state FROM ${tbl} WHERE id = ?`, [res.id]);
+        const exists = await tx.query<{ sync_state: string; reject_reason: string | null }>(
+          `SELECT sync_state, reject_reason FROM ${tbl} WHERE id = ?`,
+          [res.id],
+        );
         if (!exists.length) continue;
         const key = `${tbl}:${res.id}`;
         const maxN = this.batchMaxN.get(key);
         this.batchMaxN.delete(key);
+        const pushed = tbl === 'customers' ? this.batchCust.get(res.id) : undefined;
+        if (tbl === 'customers') this.batchCust.delete(res.id);
+        if (res.status !== 'stored' && res.status !== 'already'
+          && exists[0].sync_state === 'rejected' && exists[0].reject_reason === ORIGINAL_REJECTED) {
+          continue; // voided earlier in this same result list (its original was refused)
+        }
         /** Remove the outbox rows this push covered; returns how many newer rows remain. */
         const dropCovered = async (): Promise<number> => {
           if (maxN === undefined) {
@@ -957,6 +1138,12 @@ export class SqlRepo implements Repo {
             `UPDATE ${tbl} SET sync_state = ?, server_seq = COALESCE(?, server_seq), received_at = ?, reject_reason = NULL WHERE id = ?`,
             [remaining > 0 ? 'pending' : 'accepted', res.seq ?? null, serverTime, res.id],
           );
+          if (tbl === 'customers') {
+            const stored = pushed ?? customerWire((await this.customerTx(tx, res.id))!);
+            await tx.run(`UPDATE customers SET server_row = ? WHERE id = ?`, [
+              serverRowJson({ ...stored, received_at: serverTime }), res.id,
+            ]);
+          }
           counts.accepted++;
           continue;
         }
@@ -979,41 +1166,60 @@ export class SqlRepo implements Repo {
           counts.retry++;
           continue;
         }
+        let remaining = 0;
         if (reason === 'ALREADY_REVERSED') {
           await tx.run('DELETE FROM outbox WHERE tbl = ? AND row_id = ?', [tbl, res.id]);
         } else {
-          await dropCovered();
+          remaining = await dropCovered();
         }
         await tx.run(`UPDATE ${tbl} SET sync_state = 'rejected', reject_reason = ? WHERE id = ?`, [reason, res.id]);
+        if (tbl === 'entries') await this.voidReversalsTx(tx, res.id);
+        else if (remaining === 0) await this.restoreServerCustomerTx(tx, res.id, reason); // else a newer edit is pushed next
         counts.rejected++;
       }
     });
     return counts;
   }
 
-  async applyPullPage(page: PullResponse): Promise<void> {
+  async applyPullPage(page: PullResponse, since?: number): Promise<void> {
     await this.db.transaction(async (tx) => {
+      if (since !== undefined) {
+        // The page was requested from `since`. If the cursor moved meanwhile (a restore, "Re-upload everything",
+        // an epoch change or unpair reset it to 0), this page is stale: applying it would move the cursor past
+        // rows that were just wiped, and they would never be pulled again.
+        const cur = Number(await metaGet(tx, 'cursor')) || 0;
+        if (cur !== since) return;
+      }
       for (const ch of page.changes) {
         if (ch.tbl === 'customers') {
           const row = ch.row;
+          const receivedAt = row.received_at ?? page.server_time;
+          const shadow = serverRowJson({ ...row, received_at: receivedAt });
           const pending = await tx.query(`SELECT 1 AS x FROM outbox WHERE tbl = 'customers' AND row_id = ? LIMIT 1`, [row.id]);
-          if (pending.length && !row.erased_at) continue; // the local edit wins; it is pushed next
+          if (pending.length && !row.erased_at) {
+            // The local edit wins; it is pushed next. Remember the server content in case that push is refused.
+            await tx.run(`UPDATE customers SET server_row = ?, server_seq = COALESCE(server_seq, ?) WHERE id = ?`, [shadow, ch.seq, row.id]);
+            continue;
+          }
           if (row.erased_at) await tx.run(`DELETE FROM outbox WHERE tbl = 'customers' AND row_id = ?`, [row.id]);
           await tx.run(
-            `INSERT INTO customers (${CUST_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', NULL)
+            `INSERT INTO customers (${CUST_COLS}, server_row) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', NULL, ?)
              ON CONFLICT(id) DO UPDATE SET code = excluded.code, name = excluded.name, search_name = excluded.search_name,
                phone = excluded.phone, note = excluded.note, archived_at = excluded.archived_at,
                erased_at = excluded.erased_at, created_at = excluded.created_at, updated_at = excluded.updated_at,
                updated_by = excluded.updated_by, received_at = excluded.received_at, server_seq = excluded.server_seq,
-               sync_state = 'accepted', reject_reason = NULL`,
+               sync_state = 'accepted', reject_reason = NULL, server_row = excluded.server_row`,
             [row.id, row.code, row.name, row.search_name, row.phone, row.note, row.archived_at, row.erased_at,
-              row.created_at, row.updated_at, row.updated_by, row.received_at ?? page.server_time, ch.seq],
+              row.created_at, row.updated_at, row.updated_by, receivedAt, ch.seq, shadow],
           );
         } else if (ch.tbl === 'entries') {
           const e = ch.row;
           const receivedAt = e.received_at ?? page.server_time;
+          // ON CONFLICT(id) ignores only the duplicate id: a row the local schema refuses (CHECK, NOT NULL, FK)
+          // fails the whole page, so the cursor does not move past an entry this phone never stored.
           await tx.run(
-            `INSERT OR IGNORE INTO entries (${ENTRY_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', NULL)`,
+            `INSERT INTO entries (${ENTRY_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', NULL)
+             ON CONFLICT(id) DO NOTHING`,
             [e.id, e.customer_id, e.kind, e.amount_paise, e.delta_paise, e.biz_date, e.note, e.mode,
               e.reverses_entry_id, e.device_id, e.created_at, receivedAt, ch.seq],
           );
@@ -1026,13 +1232,18 @@ export class SqlRepo implements Repo {
             // Another phone reversed the same entry first: our unaccepted duplicate can never be stored
             // (the server answers ALREADY_REVERSED), so hide it now instead of double-counting until the push.
             const dups = await tx.query<{ id: string }>(
-              `SELECT id FROM entries WHERE reverses_entry_id = ? AND id <> ? AND sync_state = 'pending'`,
-              [e.reverses_entry_id, e.id],
+              `SELECT id FROM entries WHERE reverses_entry_id = ? AND id <> ?
+                 AND (sync_state = 'pending' OR (sync_state = 'rejected' AND reject_reason = ?))`,
+              [e.reverses_entry_id, e.id, ORIGINAL_REJECTED],
             );
             for (const d of dups) {
               await tx.run(`UPDATE entries SET sync_state = 'rejected', reject_reason = 'ALREADY_REVERSED' WHERE id = ?`, [d.id]);
               await tx.run(`DELETE FROM outbox WHERE tbl = 'entries' AND row_id = ?`, [d.id]);
             }
+          } else {
+            // The server holds this entry after all (e.g. our copy was refused as MISMATCH): a reversal of it
+            // voided by that refusal counts again and is pushed.
+            await this.reviveReversalsTx(tx, e.id);
           }
         }
       }
@@ -1047,12 +1258,16 @@ export class SqlRepo implements Repo {
     });
   }
 
-  /** Every row (except hidden duplicates and dismissed rows) back to pending, one outbox row each, in push
-   *  order: customers by creation, then non-reversal entries by creation, then reversals by creation. */
+  /** Every row back to pending, one outbox row each, in push order: customers by creation, then non-reversal
+   *  entries by creation, then reversals by creation. Rejected rows stay rejected (they count nowhere and are
+   *  resent one by one from Needs attention), except a customer the server had accepted before, whose content
+   *  is the server's own. Invalidates any push batch or pull page in flight. */
   private async requeueTx(tx: DbExec): Promise<number> {
     const now = this.nowIso();
-    await tx.run(`UPDATE customers SET sync_state = 'pending', server_seq = NULL, reject_reason = NULL WHERE ${REQUEUE_COND}`);
-    await tx.run(`UPDATE entries SET sync_state = 'pending', server_seq = NULL, reject_reason = NULL WHERE ${REQUEUE_COND}`);
+    await tx.run(
+      `UPDATE customers SET sync_state = 'pending', server_seq = NULL, server_row = NULL, reject_reason = NULL WHERE ${REQUEUE_CUST}`,
+    );
+    await tx.run(`UPDATE entries SET sync_state = 'pending', server_seq = NULL, reject_reason = NULL WHERE ${REQUEUE_ENTRY}`);
     await tx.run('DELETE FROM outbox');
     const a = await tx.run(
       `INSERT INTO outbox (tbl, row_id, queued_at)
@@ -1065,8 +1280,14 @@ export class SqlRepo implements Repo {
        ORDER BY CASE WHEN kind = 'REVERSAL' THEN 1 ELSE 0 END, created_at, id`,
       [now],
     );
-    this.batchMaxN.clear();
+    this.invalidateBatches();
     return a.changes + b.changes;
+  }
+
+  private invalidateBatches(): void {
+    this.batchMaxN.clear();
+    this.batchCust.clear();
+    this.generation++;
   }
 
   async handleEpochChange(newEpoch: string): Promise<void> {
@@ -1087,13 +1308,12 @@ export class SqlRepo implements Repo {
 
   async needsAttention(): Promise<NeedsAttentionItem[]> {
     const custRows = await this.db.query(
-      `SELECT ${CUST_COLS} FROM customers WHERE ${ACTIVE_REJECT} ORDER BY updated_at, id`,
+      `SELECT ${CUST_COLS} FROM customers c WHERE ${activeReject('c')} ORDER BY updated_at, id`,
     );
     const entRows = await this.db.query(
       `SELECT ${ENTRY_COLS.split(', ').map((c) => `e.${c} AS ${c}`).join(', ')}, c.name AS customer_name, c.code AS customer_code
        FROM entries e JOIN customers c ON c.id = e.customer_id
-       WHERE e.sync_state = 'rejected' AND COALESCE(e.reject_reason, '') <> 'ALREADY_REVERSED'
-         AND COALESCE(e.reject_reason, '') NOT LIKE 'DISCARDED%'
+       WHERE ${activeReject('e')}
        ORDER BY e.created_at, e.id`,
     );
     const items: NeedsAttentionItem[] = custRows.map((r) => {
@@ -1127,10 +1347,13 @@ export class SqlRepo implements Repo {
         if (!reason.startsWith('DISCARDED')) {
           await tx.run(`UPDATE ${tbl} SET reject_reason = ? WHERE id = ?`, [`DISCARDED:${reason}`, id]);
         }
+        // A pending reversal of a discarded entry stays void (it was voided when the entry was refused).
+        if (tbl === 'entries') await this.voidReversalsTx(tx, id);
         return;
       }
       await tx.run(`UPDATE ${tbl} SET sync_state = 'pending', reject_reason = NULL WHERE id = ?`, [id]);
       await this.enqueue(tx, tbl, id);
+      if (tbl === 'entries') await this.reviveReversalsTx(tx, id); // queued after the original
     });
   }
 
@@ -1139,6 +1362,16 @@ export class SqlRepo implements Repo {
     sync_epoch: string; code_block: { start: number; end: number };
   }): Promise<void> {
     await this.db.transaction(async (tx) => {
+      // Which server held this phone's accepted rows: the current pairing, else the one before the last unpair.
+      const curShop = await metaGet(tx, 'shop_id');
+      const curEpoch = await metaGet(tx, 'sync_epoch');
+      const before = curShop && curEpoch ? pairingKey(curShop, curEpoch) : await metaGet(tx, 'last_pairing');
+      const [acc] = await tx.query<{ k: number }>(
+        `SELECT (SELECT COUNT(*) FROM customers WHERE sync_state = 'accepted' OR server_seq IS NOT NULL)
+              + (SELECT COUNT(*) FROM entries WHERE sync_state = 'accepted' OR server_seq IS NOT NULL) AS k`,
+      );
+      const reupload = n(acc?.k) > 0 && before !== pairingKey(p.shop.id, p.sync_epoch);
+
       const old = await metaGet(tx, 'device_id');
       if (old && old.startsWith('local-') && old !== p.device_id) {
         await tx.run('UPDATE entries SET device_id = ? WHERE device_id = ?', [p.device_id, old]);
@@ -1154,11 +1387,19 @@ export class SqlRepo implements Repo {
       await metaSet(tx, 'lang', p.shop.lang === 'en' ? 'en' : 'ta');
       await metaSet(tx, 'sync_epoch', p.sync_epoch);
       await metaSet(tx, 'cursor', '0');
+      await metaSet(tx, 'last_pairing', null);
       await metaSet(tx, 'code_next', String(p.code_block.start));
       await metaSet(tx, 'code_end', String(p.code_block.end));
       await metaSet(tx, 'spare_start', null);
       await metaSet(tx, 'spare_end', null);
       await metaSet(tx, 'last_sync_error', null);
+      if (reupload) {
+        // Rows accepted by ANOTHER server (a redeployed Worker, a test server swapped for production, a restored
+        // database with a new epoch): this server may hold none of them. Push everything; rows it already has
+        // come back 'already'.
+        await this.requeueTx(tx);
+        return;
+      }
       // Safety net: every pending row must have an outbox row so the first push uploads the offline history.
       const now = this.nowIso();
       await tx.run(
@@ -1242,7 +1483,12 @@ export class SqlRepo implements Repo {
 
   async unpair(wipe: boolean): Promise<void> {
     await this.db.transaction(async (tx) => {
+      // Remember which server holds the accepted rows, so re-pairing elsewhere re-uploads them (completePairing).
+      const shopId = await metaGet(tx, 'shop_id');
+      const epoch = await metaGet(tx, 'sync_epoch');
+      if (shopId && epoch) await metaSet(tx, 'last_pairing', pairingKey(shopId, epoch));
       if (wipe) {
+        await metaSet(tx, 'last_pairing', null);
         await tx.run('DELETE FROM outbox');
         await tx.run('DELETE FROM entries');
         await tx.run('DELETE FROM customers');
@@ -1258,24 +1504,36 @@ export class SqlRepo implements Repo {
       await metaSet(tx, 'code_next', String((await this.maxCodeTx(tx)) + 1));
       await metaSet(tx, 'code_end', String(PROVISIONAL_CODE_END));
     });
-    this.batchMaxN.clear();
+    this.invalidateBatches();
   }
 
   // ---------------------------------------------------------------- backup
 
   private async exportTx(tx: DbExec): Promise<BackupFile> {
     const shop = (await metaGet(tx, 'shop_name')) ?? '';
-    const custs = await tx.query(`SELECT ${CUST_COLS} FROM customers ORDER BY code, created_at, id`);
-    // Rejected entries (refused by the server, hidden duplicates, dismissed rows) never count, so they are not
-    // carried into a backup where an import would make them count again.
+    // A customer the server never accepted and the user dismissed is gone from every list; an import (which
+    // marks everything pending) would bring it back with its entries, so it is left out.
+    const custs = await tx.query(
+      `SELECT ${CUST_COLS} FROM customers
+       WHERE NOT (sync_state = 'rejected' AND server_seq IS NULL AND COALESCE(reject_reason, '') LIKE 'DISCARDED%')
+       ORDER BY code, created_at, id`,
+    );
+    // Rejected entries (refused by the server, hidden duplicates, void reversals, dismissed rows) never count,
+    // so they are not carried into a backup where an import would make them count again.
     const ents = await tx.query(`SELECT ${ENTRY_COLS} FROM entries WHERE sync_state <> 'rejected' ORDER BY created_at, id`);
+    const customers = custs.map((r) => customerWire(toCustomer(r)));
+    const custIds = new Set(customers.map((c) => c.id));
+    let entries = ents.map((r) => entryWire(toEntry(r))).filter((e) => custIds.has(e.customer_id));
+    // Every exported reversal must find its target in the file, or validateBackup() refuses the whole file.
+    const ids = new Set(entries.map((e) => e.id));
+    entries = entries.filter((e) => e.kind !== 'REVERSAL' || (e.reverses_entry_id != null && ids.has(e.reverses_entry_id)));
     return {
       format: 'kadan-kanakku-backup',
       version: 1,
       exported_at: this.nowIso(),
       shop_name: shop,
-      customers: custs.map((r) => customerWire(toCustomer(r))),
-      entries: ents.map((r) => entryWire(toEntry(r))),
+      customers,
+      entries,
     };
   }
 
@@ -1324,6 +1582,11 @@ export class SqlRepo implements Repo {
       return this.exportTx(tx);
     });
   }
+}
+
+/** Identity of the server a phone's accepted rows live on (meta last_pairing). */
+function pairingKey(shopId: string, epoch: string): string {
+  return `${shopId} ${epoch}`;
 }
 
 // ------------------------------------------------------------------ backup validation

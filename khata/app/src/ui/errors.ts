@@ -17,7 +17,7 @@ export function errorText(e: unknown): string {
   if (code) {
     if (e instanceof SyncError || hasKey(`serr.${code}`)) {
       const k = `serr.${code}`;
-      if (hasKey(k)) return t(k);
+      if (hasKey(k)) return t(k, { msg: e instanceof Error ? e.message : '' });
     }
     const k = `err.${code}`;
     if (hasKey(k)) return t(k);

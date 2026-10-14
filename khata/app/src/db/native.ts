@@ -93,6 +93,10 @@ export async function openNative(opts: { name?: string } = {}): Promise<Db> {
 
   const queue = new SerialQueue();
   let closed = false;
+  // Set when a native transaction may still be open and could not be rolled back. From then on every call fails
+  // loudly: run() with transaction=false would otherwise land inside that never-committed transaction and be lost
+  // when the process dies. Restarting the app closes the native connection, which rolls the transaction back.
+  let broken: Error | null = null;
 
   const runOn = async (sql: string, params?: SqlValue[]): Promise<{ changes: number }> => {
     try {
@@ -112,6 +116,21 @@ export async function openNative(opts: { name?: string } = {}): Promise<Db> {
   };
   const ensureOpen = (): void => {
     if (closed) throw new Error('Database is closed');
+    if (broken) throw broken;
+  };
+  /** End any native transaction still open. Returns false (and marks the Db broken) if that is not possible. */
+  const endStaleTransaction = async (why: string): Promise<boolean> => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (!(await conn.isTransactionActive()).result) return true;
+        console.warn(`[db] rolling back a native transaction left open (${why})`);
+        await conn.rollbackTransaction();
+      } catch (e) {
+        console.error('[db] rollback failed', e);
+      }
+    }
+    broken = new Error('Database transaction could not be closed. Close and reopen the app.');
+    return false;
   };
 
   const db: Db = {
@@ -154,6 +173,9 @@ export async function openNative(opts: { name?: string } = {}): Promise<Db> {
             return queryOn<R>(sql, params);
           },
         };
+        // Cheap guard (one native call): a transaction that leaked earlier would make beginTransaction() throw
+        // "Already in transaction" forever and swallow autocommit writes; roll it back first.
+        if (!(await endStaleTransaction('before begin'))) throw broken ?? new Error('Database unavailable');
         try {
           await conn.beginTransaction();
         } catch (e) {
@@ -166,11 +188,7 @@ export async function openNative(opts: { name?: string } = {}): Promise<Db> {
           return result;
         } catch (e) {
           active = false;
-          try {
-            if ((await conn.isTransactionActive()).result) await conn.rollbackTransaction();
-          } catch {
-            /* the connection already ended the transaction */
-          }
+          await endStaleTransaction('after a failed transaction');
           throw asError(e);
         }
       });

@@ -1,7 +1,8 @@
 /**
  * Gave / Got keypad (one screen, kind preselected, colour-coded). Custom keypad, never the system keyboard.
  * Correction mode (state.correct): prefilled with the original; on Save the original is reversed and the corrected
- * entry added, so fixing ₹1,500 → ₹150 is one edit + Save, and backing out changes nothing.
+ * entry added in ONE transaction (repo.correctEntry), so fixing ₹1,500 → ₹150 is one edit + Save, and backing out
+ * changes nothing. Backing out with a new amount typed asks first (a slipped thumb must not lose an entry).
  */
 import { addDays, amountInWords, formatINR, formatTyping } from '../../core/ledger';
 import type { EntryView, PayMode } from '../../data/types';
@@ -18,6 +19,7 @@ import { quick } from '../quick-session';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { signedBal } from './customer';
+import { homeState } from './home';
 
 type Kind = 'GIVE' | 'RECEIVE';
 
@@ -50,7 +52,7 @@ export const entryScreen: Screen = async (root, route) => {
   const amountWords = h('div', { class: 'amount-words', attrs: { 'data-testid': 'amount-words' } });
   const amountBox = h('div', 'amount-box', amountVal, amountWords);
   const chips = h('div', 'chips');
-  const noteIn = h('input', { class: 'input note-input', attrs: { type: 'text', placeholder: t('entry.notePh'), maxlength: 200, autocomplete: 'off', enterkeyhint: 'done', 'data-testid': 'entry-note' } });
+  const noteIn = h('input', { class: 'input note-input', attrs: { type: 'text', maxlength: 200, autocomplete: 'off', enterkeyhint: 'done', 'data-testid': 'entry-note' } });
   noteIn.value = correct?.note ?? '';
   noteIn.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') void app.platform.hideKeyboard();
@@ -66,6 +68,7 @@ export const entryScreen: Screen = async (root, route) => {
     amountBox.className = `amount-box ${tone}`;
     header.className = `topbar ${tone}`;
     if (!correct) titleEl.textContent = kind === 'GIVE' ? t('entry.gaveTitle') : t('entry.gotTitle');
+    noteIn.placeholder = kind === 'GIVE' ? t('entry.notePh') : t('entry.notePhGot');
     saveBtn.className = `btn btn-xl btn-block btn-${tone}`;
     saveBtn.textContent = isQuick ? t('entry.saveNext') : t('entry.save');
     saveBtn.disabled = saving || p === null;
@@ -98,10 +101,12 @@ export const entryScreen: Screen = async (root, route) => {
           }),
         );
       }
+      const modes = h('div', 'seg seg-sm');
+      chips.appendChild(modes);
       for (const m of ['CASH', 'UPI', 'OTHER'] as PayMode[]) {
-        chips.appendChild(
+        modes.appendChild(
           h('button', {
-            class: `chip${mode === m ? ' on-got' : ''}`,
+            class: mode === m ? 'on-got' : '',
             attrs: { type: 'button', 'aria-pressed': mode === m ? 'true' : 'false', 'data-testid': `mode-${m}` },
             text: t(`mode.${m}` as const),
             on: { click: () => { mode = m; paint(); } },
@@ -171,6 +176,19 @@ export const entryScreen: Screen = async (root, route) => {
         });
         if (!ok) return;
       }
+      // Got more than the due: the rest becomes an advance. Typing 500 for 50 must not pass silently.
+      const dueBefore = correct ? balance - correct.delta_paise : balance;
+      if (kind === 'RECEIVE' && dueBefore > 0 && paise > dueBefore) {
+        const ok = await dialog<boolean>({
+          body: h('p', { text: t('entry.advanceConfirm', { due: formatINR(dueBefore), adv: formatINR(paise - dueBefore) }) }),
+          buttons: [
+            { label: t('common.no'), value: false },
+            { label: t('common.yes'), value: true, kind: 'got' },
+          ],
+          dismissValue: false,
+        });
+        if (!ok) return;
+      }
       if (!correct && (await app.repo.recentDuplicate(c.id, kind, paise))) {
         const ok = await dialog<boolean>({
           body: h('p', { text: t('entry.dupConfirm', { amount: formatINR(paise) }) }),
@@ -182,16 +200,19 @@ export const entryScreen: Screen = async (root, route) => {
         });
         if (!ok) return;
       }
-      if (correct) await app.repo.reverseEntry(correct.id);
-      const res = await app.repo.addEntry({
+      const input = {
         customer_id: c.id,
         kind,
         amount_paise: paise,
         biz_date: date,
         note: noteIn.value,
         mode: kind === 'RECEIVE' ? mode : null,
-      });
+      };
+      // A correction is one transaction: never a reversed original without its replacement.
+      const res = correct ? await app.repo.correctEntry(correct.id, input) : await app.repo.addEntry(input);
       afterWrite();
+      // The next customer at the counter starts from a clean home search.
+      homeState.q = '';
       void app.platform.hapticTap();
       const bal = signedBal(res.balance_paise);
       if (isQuick) {
@@ -200,12 +221,14 @@ export const entryScreen: Screen = async (root, route) => {
         if (kind === 'GIVE') quick.gave += paise;
         else quick.got += paise;
       }
-      router.back();
+      router.back({ force: true });
       if (correct) {
         toast(t('entry.corrected', { bal }));
         return;
       }
-      const msg = kind === 'GIVE' ? t('entry.addedGave', { amount: formatINR(paise), bal }) : t('entry.addedGot', { amount: formatINR(paise), bal });
+      const base = kind === 'GIVE' ? t('entry.addedGave', { amount: formatINR(paise), bal }) : t('entry.addedGot', { amount: formatINR(paise), bal });
+      // Quick entry returns to the list, not the customer: name the customer so the Undo is unambiguous.
+      const msg = isQuick ? `${c.name}: ${base}` : base;
       toast(msg, {
         action: {
           label: t('common.undo'),
@@ -256,5 +279,30 @@ export const entryScreen: Screen = async (root, route) => {
     e.preventDefault();
   };
   window.addEventListener('keydown', onKeyDown);
-  return () => window.removeEventListener('keydown', onKeyDown);
+
+  // Back with a NEW amount typed: ask before throwing it away. Correction mode backs out freely (nothing changes).
+  let asking = false;
+  const removeGuard = router.setLeaveGuard(() => {
+    if (correct || saving || !raw) return false;
+    if (!asking) {
+      asking = true;
+      void dialog<boolean>({
+        title: t('entry.discardTitle'),
+        body: h('p', { class: 'amount-confirm num', text: `₹${formatTyping(raw)}` }),
+        buttons: [
+          { label: t('entry.discard'), value: true, kind: 'danger' },
+          { label: t('entry.keepEditing'), value: false, kind: 'primary' },
+        ],
+        dismissValue: false,
+      }).then((discard) => {
+        asking = false;
+        if (discard && root.isConnected) router.back({ force: true });
+      });
+    }
+    return true;
+  });
+  return () => {
+    window.removeEventListener('keydown', onKeyDown);
+    removeGuard();
+  };
 };

@@ -112,13 +112,14 @@ export function createWebPlatform(): Platform {
         if (typeof navigator.canShare !== 'function' || navigator.canShare(data)) {
           try {
             await navigator.share(data);
-            return;
+            return true;
           } catch (e) {
-            if (isAbort(e)) return;
+            if (isAbort(e)) return false;
           }
         }
       }
       download(fileName, blob);
+      return true;
     },
 
     copyText,

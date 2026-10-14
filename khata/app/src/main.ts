@@ -82,12 +82,13 @@ function registerScreens(): void {
   router.registerScreen('quick', quickScreen);
 }
 
-function onBack(allowExit: boolean): boolean {
+/** Back: gate, then the top dialog/sheet, then the screen stack. At the root it is NOT consumed, so the platform
+ *  minimises the app (moveTaskToBack) instead of finishing the activity: coming back is then a warm resume, not a
+ *  cold boot with WebView reload, DB open, PIN and sync restart. */
+function onBack(): boolean {
   if (gateOpen()) return gateHandleBack();
   if (dismissTopLayer()) return true;
-  if (router.back()) return true;
-  if (allowExit) void app.platform.exitApp();
-  return true;
+  return router.back();
 }
 
 async function lockNow(): Promise<void> {
@@ -116,9 +117,9 @@ async function boot(): Promise<void> {
 
   registerScreens();
   router.mountRouter(host);
-  app.platform.onBackButton(() => onBack(true));
+  app.platform.onBackButton(() => onBack());
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') onBack(false);
+    if (e.key === 'Escape') onBack();
   });
 
   // Lock after `lock_timeout_min` in the background.

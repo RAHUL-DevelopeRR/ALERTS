@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!--
+  Shown by Capacitor instead of the app when the phone's Android System WebView is older than
+  android.minWebViewVersion (capacitor.config.ts, server.errorPath). It must work on very old WebViews:
+  plain HTML + inline CSS, no script, no modern CSS.
+-->
+<html lang="ta">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f5132">
+<title>Kadan Kanakku</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; color: #1b1b1b; }
+  body { font-family: sans-serif; font-size: 18px; line-height: 1.5; }
+  .bar { background: #0f5132; color: #ffffff; padding: 16px; font-size: 20px; font-weight: bold; }
+  .wrap { padding: 16px; }
+  h1 { font-size: 22px; margin: 0 0 8px 0; }
+  p { margin: 0 0 12px 0; }
+  ol { margin: 0 0 16px 0; padding-left: 24px; }
+  li { margin-bottom: 6px; }
+  .sep { border: 0; border-top: 1px solid #dddddd; margin: 20px 0; }
+  .btn { display: block; background: #0f5132; color: #ffffff; text-align: center; text-decoration: none;
+         padding: 14px 16px; border-radius: 8px; font-size: 18px; font-weight: bold; margin: 8px 0 4px 0; }
+  .small { font-size: 15px; color: #555555; }
+</style>
+</head>
+<body>
+<div class="bar">கடன் கணக்கு · Kadan Kanakku</div>
+<div class="wrap">
+  <h1>"Android System WebView" புதுப்பிக்கவும்</h1>
+  <p>இந்த போனில் உள்ள "Android System WebView" மிகவும் பழையது. அதனால் ஆப் திறக்கவில்லை. உங்கள் கணக்குகள் பாதுகாப்பாக உள்ளன.</p>
+  <ol>
+    <li>Play Store-ஐ திறக்கவும்.</li>
+    <li>"Android System WebView" என்று தேடவும்.</li>
+    <li>"Update" அழுத்தவும். பிறகு இந்த ஆப்பை மூடி மீண்டும் திறக்கவும்.</li>
+  </ol>
+
+  <hr class="sep">
+
+  <h1>Update "Android System WebView"</h1>
+  <p>This phone's "Android System WebView" is too old, so the app cannot open. Your records are safe.</p>
+  <ol>
+    <li>Open the Play Store.</li>
+    <li>Search for "Android System WebView".</li>
+    <li>Tap "Update". Then close this app and open it again.</li>
+  </ol>
+
+  <a class="btn" href="https://play.google.com/store/apps/details?id=com.google.android.webview">Play Store</a>
+  <p class="small">Chrome 80 or newer is needed. / Chrome 80 அல்லது புதிய பதிப்பு தேவை.</p>
+</div>
+</body>
+</html>

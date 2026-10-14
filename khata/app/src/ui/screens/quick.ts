@@ -1,12 +1,15 @@
 /**
  * Quick entry (from the day book): search customer -> keypad -> "Save & next" -> back here, for the evening's
  * paper slips. The date chip is sticky across the sitting; a running count and totals are shown.
+ * A name that is not in the list gets the same "add as new" row as home: new customer -> keypad (quick mode,
+ * sticky date) -> back here, without losing the sitting.
  */
-import { addDays, formatINR, matchesQuery, searchKey } from '../../core/ledger';
+import { addDays, formatINR, matchesQuery, normName, searchKey } from '../../core/ledger';
 import { t } from '../../i18n';
 import { app, refreshSettings } from '../app';
 import { button, clear, h, icon } from '../components/dom';
 import { actionSheet, dialog } from '../components/overlay';
+import { searchField } from '../components/search';
 import { shell, showFooter } from '../components/shell';
 import { day, money, today, toneClass } from '../format';
 import { endQuick, quick } from '../quick-session';
@@ -26,7 +29,7 @@ export const quickScreen: Screen = async (root) => {
   const { body, footer } = shell(root, { title: t('quick.title'), back: true });
 
   const summary = h('div', { class: 'card', attrs: { 'data-testid': 'quick-sitting' } },
-    h('div', { class: 'tot-label', text: t('quick.sitting', { n: quick.count, gave: formatINR(quick.gave), got: formatINR(quick.got) }) }),
+    h('div', { class: 'tot-label', text: t(quick.count === 1 ? 'quick.sittingOne' : 'quick.sitting', { n: quick.count, gave: formatINR(quick.gave), got: formatINR(quick.got) }) }),
   );
   const date = quick.date ?? todayStr;
   const dateLabel = date === todayStr ? t('common.today') : date === addDays(todayStr, -1) ? t('common.yesterday') : day(date, false);
@@ -66,7 +69,8 @@ export const quickScreen: Screen = async (root) => {
     });
   };
 
-  const input = h('input', { class: 'input', attrs: { type: 'search', placeholder: t('home.search'), autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', 'data-testid': 'quick-search' } });
+  const search = searchField({ value: '', testid: 'quick-search', onInput: () => paint(), onEnter: () => void app.platform.hideKeyboard() });
+  const input = search.input;
   const list = h('div', 'list');
   const paint = (): void => {
     clear(list);
@@ -82,14 +86,23 @@ export const quickScreen: Screen = async (root) => {
         ),
       );
     }
-    list.classList.toggle('hidden', shown.length === 0);
+    if (q && !rows.some((r) => normName(r.name) === normName(q))) {
+      list.appendChild(
+        h(
+          'button',
+          { class: `cust-row add-row${shown.length ? ' secondary' : ''}`, attrs: { type: 'button', 'data-testid': 'quick-add-as-new' }, on: { click: () => void router.go('customer-edit', { name: q, quick: '1' }) } },
+          icon('plus'),
+          h('span', { class: 'cust-main', text: t('home.addAs', { q }) }),
+        ),
+      );
+    }
+    list.classList.toggle('hidden', !list.firstChild);
   };
-  input.addEventListener('input', paint);
   body.append(
     summary,
     h('div', 'chips', dateChip),
     h('p', { class: 'muted', style: { fontSize: '15px', margin: '4px 4px 10px' }, text: t('quick.help') }),
-    h('div', 'search-wrap', icon('search'), input),
+    search.el,
     list,
   );
   paint();

@@ -1,16 +1,20 @@
-/** Statement: period chips, Tamil/English message toggle, preview, WhatsApp / SMS / Share / Copy. */
-import { addDays, normalizePhone, smsLink, smsSegments, whatsappLink } from '../../core/ledger';
+/**
+ * Statement: period chips, Tamil/English message toggle, a one-line summary, the preview (capped, own scroll) and
+ * WhatsApp / SMS / Share / Copy in a sticky footer, so "send it on WhatsApp" is one tap however long the month was.
+ */
+import { addDays, formatINR, normalizePhone, smsLink, smsSegments, whatsappLink } from '../../core/ledger';
 import type { Lang } from '../../data/types';
 import { getLang, t } from '../../i18n';
 import { app, refreshSettings } from '../app';
 import { add, button, h, icon } from '../components/dom';
 import { promptDialog, toast } from '../components/overlay';
-import { shell } from '../components/shell';
+import { shell, showFooter } from '../components/shell';
 import { errorText } from '../errors';
 import { today } from '../format';
 import * as router from '../router';
 import type { Screen } from '../router';
-import { smsText, statementText } from '../statement-text';
+import { entryLine, smsText, statementText } from '../statement-text';
+import { signedBal } from './customer';
 
 type Period = 'default' | 'last30' | 'all' | 'custom';
 
@@ -42,7 +46,7 @@ export const statementScreen: Screen = async (root, route) => {
   const text = statementText(st, opts);
   const sms = smsText(c, balance, opts);
 
-  const { body } = shell(root, { title: t('st.title'), sub: c.name, back: true });
+  const { body, footer } = shell(root, { title: t('st.title'), sub: c.name, back: true });
   const set = (patch: Record<string, string>): void => {
     Object.assign(route.params, patch);
     void router.rerender();
@@ -105,25 +109,40 @@ export const statementScreen: Screen = async (root, route) => {
     }
   };
   const segs = smsSegments(sms).segments;
-  const actions = h(
-    'div',
-    'share-grid',
-    button([icon('chat'), t('st.whatsapp')], () => void open(whatsappLink(c.phone, text)), 'btn btn-got btn-big wide', { 'data-testid': 'st-whatsapp' }),
-    c.phone ? button(t('st.otherNumber'), () => void sendOther(), 'btn wide', { 'data-testid': 'st-other' }) : null,
-    button([icon('sms'), t('st.sms')], () => void open(smsLink(c.phone, sms)), 'btn btn-big', { 'data-testid': 'st-sms' }),
-    button([icon('share'), t('st.share')], () => void app.platform.shareText(text, t('st.title')), 'btn btn-big', { 'data-testid': 'st-share' }),
-    button([icon('copy'), t('st.copy')], () => {
-      void app.platform.copyText(text).then(() => toast(t('common.copied')), (e) => toast(errorText(e), { error: true }));
-    }, 'btn btn-big wide', { 'data-testid': 'st-copy' }),
+  // Sticky footer: WhatsApp big, then SMS / Share / Copy in one row.
+  showFooter(
+    footer,
+    button([icon('chat'), t('st.whatsapp')], () => void open(whatsappLink(c.phone, text)), 'btn btn-got btn-big btn-block', { 'data-testid': 'st-whatsapp' }),
+    h(
+      'div',
+      'footer-row share-row',
+      button([icon('sms'), t('st.sms')], () => void open(smsLink(c.phone, sms)), 'btn', { 'data-testid': 'st-sms' }),
+      button([icon('share'), t('st.share')], () => void app.platform.shareText(text, t('st.title')), 'btn', { 'data-testid': 'st-share' }),
+      button([icon('copy'), t('st.copy')], () => {
+        void app.platform.copyText(text).then(() => toast(t('common.copied')), (e) => toast(errorText(e), { error: true }));
+      }, 'btn', { 'data-testid': 'st-copy' }),
+    ),
   );
+  const shownIds = new Set(st.rows.filter((r) => r.kind !== 'REVERSAL').map((r) => r.id));
+  const lineCount = st.rows.filter((r) => entryLine(r, shownIds, lang) !== null).length;
+  const summary = h('div', {
+    class: 'st-summary',
+    attrs: { 'data-testid': 'st-summary' },
+    text: t('st.summary', {
+      n: lineCount,
+      opening: st.opening_paise === 0 ? formatINR(0) : signedBal(st.opening_paise),
+      closing: signedBal(st.closing_paise),
+    }),
+  });
   add(
     body,
     chips,
     custom,
     h('div', { class: 'field-label', style: { margin: '10px 2px 6px' }, text: t('st.textLang') }),
     langSeg,
+    summary,
     h('div', { class: 'preview', attrs: { 'data-testid': 'st-preview', lang }, text: text }),
-    actions,
+    c.phone ? button(t('st.otherNumber'), () => void sendOther(), 'btn btn-block', { 'data-testid': 'st-other' }) : null,
     h('p', { class: 'muted', style: { fontSize: '14px', margin: '10px 4px' }, text: t('st.smsInfo', { n: segs }) }),
   );
 };

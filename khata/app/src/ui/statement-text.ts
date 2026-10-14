@@ -2,11 +2,15 @@
  * Pure builders for the text a shopkeeper sends: the WhatsApp statement, the one-line WhatsApp reminder and the
  * one-line SMS. No DOM, no I/O; unit-tested in test/statement-text.test.ts.
  *
- * WhatsApp formatting: *bold*, ~strike~. A reversed entry and its reversal print as ONE "Corrected" line with the
- * old amount struck through, so the customer sees one confusing-free line instead of three.
+ * The text is read by the CUSTOMER, so entries use customer-side words (stx.kind.*: "Bought on credit",
+ * "You paid"), never the shop's own Gave / Got, which read backwards from the customer's side.
+ * WhatsApp formatting: *bold*, ~strike~. A cancelled entry and its reversal print as ONE "Cancelled" line with the
+ * amount struck through. A write-off's reason is the shop's private note and is never sent.
+ * The raw upi:// link is not included by default: WhatsApp does not linkify it, so it shows as a long
+ * percent-encoded string. The UPI id line is enough to pay.
  */
 import type { Lang } from '../../../shared/protocol';
-import { formatCode, formatDay, formatINR, upiLink } from '../core/ledger';
+import { formatCode, formatDay, formatINR, hasTamil, upiLink } from '../core/ledger';
 import type { EntryView, Statement } from '../data/types';
 import { tl, type MsgKey } from '../i18n';
 
@@ -16,14 +20,24 @@ export interface TextOpts {
   lang: Lang;
   /** 'YYYY-MM-DD' the balance is stated "as of" (today IST). */
   asOf: string;
+  /** Append the raw upi://pay link after the UPI id (default false; WhatsApp does not make it tappable). */
+  upiLink?: boolean;
 }
 
-const KIND_KEY: Record<EntryView['kind'], MsgKey> = {
-  GIVE: 'kind.GIVE',
-  RECEIVE: 'kind.RECEIVE',
-  WRITEOFF: 'kind.WRITEOFF',
+/** Customer-facing entry words (the customer's side of the ledger). */
+const STX_KIND_KEY: Record<EntryView['kind'], MsgKey> = {
+  GIVE: 'stx.kind.GIVE',
+  RECEIVE: 'stx.kind.RECEIVE',
+  WRITEOFF: 'stx.kind.WRITEOFF',
   REVERSAL: 'kind.REVERSAL',
 };
+/** UPI payee name: the shop name, or the VPA when the name is Tamil (percent-encoded Tamil makes a huge link and
+ *  UPI apps show the bank-verified name anyway). */
+export function payeeName(shopName: string, vpa: string): string {
+  const n = shopName.trim();
+  return n && !hasTamil(n) ? n : vpa;
+}
+
 const MODE_KEY = { CASH: 'mode.CASH', UPI: 'mode.UPI', OTHER: 'mode.OTHER' } as const;
 
 /** One statement line for an entry, or null when it is folded into another line (a reversal of a shown entry). */
@@ -36,12 +50,13 @@ export function entryLine(e: EntryView, shownIds: ReadonlySet<string>, lang: Lan
     return `${date} · ${tl(lang, 'kind.REVERSAL')} ${e.delta_paise < 0 ? '−' : '+'}${amt}`;
   }
   if (e.is_reversed) {
-    return `${date} · ${tl(lang, 'kind.corrected')} ~${tl(lang, KIND_KEY[e.kind])} ${amt}~`;
+    return `${date} · ${tl(lang, 'stx.cancelled')} ~${tl(lang, STX_KIND_KEY[e.kind])} ${amt}~`;
   }
   const extra: string[] = [];
   if (e.kind === 'RECEIVE' && e.mode) extra.push(tl(lang, MODE_KEY[e.mode]));
-  if (e.note) extra.push(e.note);
-  return [`${date} · ${tl(lang, KIND_KEY[e.kind])} ${amt}`, ...extra].join(' · ');
+  // A write-off reason ("cannot pay", "moved away") is the shop's private note: never send it to the customer.
+  if (e.note && e.kind !== 'WRITEOFF') extra.push(e.note);
+  return [`${date} · ${tl(lang, STX_KIND_KEY[e.kind])} ${amt}`, ...extra].join(' · ');
 }
 
 /** "Balance due ₹X as of 14 Oct 2026" / advance / settled, in `lang`. */
@@ -53,7 +68,7 @@ export function closingLine(balancePaise: number, asOf: string, lang: Lang): str
 }
 
 function openingLine(paise: number, lang: Lang): string {
-  if (paise < 0) return `${tl(lang, 'stx.opening')}: ${tl(lang, 'bal.advance')} ${formatINR(-paise)}`;
+  if (paise < 0) return tl(lang, 'stx.openingAdvance', { amount: formatINR(-paise) });
   return `${tl(lang, 'stx.opening')}: ${formatINR(paise)}`;
 }
 
@@ -82,13 +97,13 @@ export function statementText(st: Statement, o: TextOpts): string {
   const upi = o.upiId?.trim();
   if (upi && st.closing_paise > 0) {
     lines.push(tl(lang, 'stx.payUpi', { id: upi }));
-    lines.push(upiLink(upi, o.shopName.trim() || upi, st.closing_paise, `Khata ${formatCode(c.code)}`));
+    if (o.upiLink) lines.push(upiLink(upi, payeeName(o.shopName, upi), st.closing_paise, `Khata ${formatCode(c.code)}`));
   }
   lines.push(tl(lang, 'stx.thanks'));
   return lines.join('\n');
 }
 
-/** One-line WhatsApp reminder for the customer screen (plus the UPI id/link when something is due). */
+/** One-line WhatsApp reminder for the customer screen (plus the UPI id when something is due). */
 export function reminderText(
   c: { name: string; code: number },
   balancePaise: number,
@@ -103,7 +118,8 @@ export function reminderText(
   else s = tl(lang, 'stx.reminderSettled', { shop, name: c.name, date });
   const upi = o.upiId?.trim();
   if (upi && balancePaise > 0) {
-    s += `\n${tl(lang, 'stx.payUpi', { id: upi })}\n${upiLink(upi, o.shopName.trim() || upi, balancePaise, `Khata ${formatCode(c.code)}`)}`;
+    s += `\n${tl(lang, 'stx.payUpi', { id: upi })}`;
+    if (o.upiLink) s += `\n${upiLink(upi, payeeName(o.shopName, upi), balancePaise, `Khata ${formatCode(c.code)}`)}`;
   }
   return s;
 }

@@ -207,6 +207,7 @@ export function actionSheet(opts: { title?: string; subtitle?: string; actions: 
 
 let toastEl: HTMLElement | null = null;
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
+let toastHasAction = false;
 
 export function toast(message: string, opts: { action?: { label: string; run: () => void }; ms?: number; error?: boolean } = {}): void {
   hideToast();
@@ -222,6 +223,7 @@ export function toast(message: string, opts: { action?: { label: string; run: ()
       : null,
   );
   toastEl = el;
+  toastHasAction = !!opts.action;
   document.body.appendChild(el);
   toastTimer = setTimeout(hideToast, opts.ms ?? (opts.action ? 10_000 : 3_000));
 }
@@ -231,4 +233,11 @@ export function hideToast(): void {
   toastTimer = null;
   toastEl?.remove();
   toastEl = null;
+  toastHasAction = false;
+}
+
+/** Remove a toast that carries an action (Undo). Called on every navigation, so an Undo for one customer's entry
+ *  is never left on top of another customer's screen. Plain info toasts may outlive the screen change. */
+export function hideActionToast(): void {
+  if (toastHasAction) hideToast();
 }

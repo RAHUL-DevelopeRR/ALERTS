@@ -130,6 +130,8 @@ export const META_KEYS = [
   'pin_hash', 'pin_salt', 'lock_timeout_min', 'confirm_above_paise',
   'last_sync_at', 'last_sync_error', 'last_backup_at', 'last_snapshot_at', 'clock_offset_ms',
   'onboarded',
+  /** "<shop_id> <sync_epoch>" of the server this phone was paired with before the last unpair (see completePairing). */
+  'last_pairing',
 ] as const;
 export type MetaKey = (typeof META_KEYS)[number];
 
@@ -217,6 +219,10 @@ export interface Repo {
   /** Appends a REVERSAL (same customer, amount, biz_date, mode as the original). Refuses a reversal of a
    *  reversal, an already-reversed entry, and a rejected entry. Returns the new balance. */
   reverseEntry(entryId: string, note?: string | null): Promise<{ reversal: Entry; balance_paise: number }>;
+  /** Correction in ONE transaction: appends the REVERSAL of `origId` and the corrected entry `input` (same
+   *  customer), both outboxed, so a crash can never leave the original reversed without its replacement.
+   *  Same refusals as reverseEntry + addEntry; nothing is written if either part fails. */
+  correctEntry(origId: string, input: NewEntryInput): Promise<{ reversal: Entry; entry: Entry; balance_paise: number }>;
   getEntry(id: string): Promise<Entry | null>;
   /** All counted entries of a customer, oldest first (biz_date, created_at, id), with running balance. */
   listEntries(customerId: string): Promise<EntryView[]>;
@@ -235,14 +241,22 @@ export interface Repo {
   // ---- sync support (used only by src/sync)
   pendingCount(): Promise<number>;
   outboxBatch(limit: number): Promise<OutboxBatch>;
+  /** Every row that exists on no server, for the file kept before a remote wipe: pending/outboxed customers and
+   *  entries (including ones the push skips, e.g. under a never-accepted rejected customer) and rejected rows the
+   *  user has not dismissed (the refused rows themselves, void reversals of a refused original), plus the
+   *  customers those entries belong to. Hidden duplicates (ALREADY_REVERSED) and dismissed rows are left out.
+   *  Read-only: does not touch the outbox bookkeeping of outboxBatch(). */
+  unsyncedRows(): Promise<OutboxBatch>;
   /** Apply push results in ONE transaction: stored/already -> accepted (+server_seq, received_at), outbox rows
    *  removed; retriable -> attempts++ (CODE_TAKEN reallocates the customer's code); permanent -> rejected;
    *  ALREADY_REVERSED -> rejected + hidden (no DELETE). `serverTime` is the response's server_time. */
   applyPushResults(results: PushResult[], serverTime: string): Promise<{ accepted: number; rejected: number; retry: number }>;
   /** Apply one pull page in ONE transaction and advance meta.cursor to page.next_since. Customers: server row
    *  wins unless the local row has a pending outbox edit (erased_at from server always wins). Entries:
-   *  INSERT OR IGNORE then mark accepted. Replaces the devices mirror and shop name/upi/lang. */
-  applyPullPage(page: PullResponse): Promise<void>;
+   *  insert unless the id exists (a row the schema refuses fails the page), then mark accepted. Replaces the
+   *  devices mirror and shop name/upi/lang. `since` (optional) is the cursor the page was requested with: when
+   *  meta.cursor no longer equals it (restore / requeue / epoch change meanwhile) the page is ignored. */
+  applyPullPage(page: PullResponse, since?: number): Promise<void>;
   /** Sync epoch changed (server restored): cursor=0, every local row back to pending + outboxed. */
   handleEpochChange(newEpoch: string): Promise<void>;
   /** "Re-upload everything" (same as epoch change without touching the epoch). */
@@ -250,7 +264,8 @@ export interface Repo {
   needsAttention(): Promise<NeedsAttentionItem[]>;
   /** Discard a rejected row from view (keeps it, marks note); `resend` re-queues it as pending. */
   resolveRejected(tbl: 'customers' | 'entries', id: string, action: 'discard' | 'resend'): Promise<void>;
-  /** After /pair: store identity, rewrite provisional device_id on this phone's rows, store code block. */
+  /** After /pair: store identity, rewrite provisional device_id on this phone's rows, store code block. Rows
+   *  accepted by a different server (other shop id or sync epoch) are all re-queued for upload. */
   completePairing(p: { server_url: string; device_id: string; device_name: string; role: Role; shop: ShopInfo; sync_epoch: string; code_block: { start: number; end: number } }): Promise<void>;
   /** Highest customer code allocated on this phone (for max_local_code). */
   maxLocalCode(): Promise<number>;

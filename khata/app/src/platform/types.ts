@@ -9,8 +9,13 @@ export interface Platform {
   openExternal(uri: string): Promise<boolean>;
   /** Android share sheet with plain text. */
   shareText(text: string, title?: string): Promise<void>;
-  /** Write `content` to a cache file and open the share sheet (Drive, WhatsApp, Files...). */
-  shareFile(fileName: string, content: string, mimeType: string, title?: string): Promise<void>;
+  /**
+   * Write `content` to a cache file and open the share sheet (Drive, WhatsApp, Files...).
+   * Resolves true when the file was handed to a target app (or downloaded, in the browser preview) and false when
+   * the user closed the share sheet without picking one. It cannot see what the target app does afterwards (e.g.
+   * the user backing out of Drive's save dialog still counts as shared). Other failures reject.
+   */
+  shareFile(fileName: string, content: string, mimeType: string, title?: string): Promise<boolean>;
   /** Copy to clipboard. */
   copyText(text: string): Promise<void>;
   /** App-private persistent files (rolling local snapshots). */

@@ -36,13 +36,16 @@ export const customerScreen: Screen = async (root, route) => {
   if (c.phone) {
     metaBits.push(' · ', button(formatPhone(c.phone), () => void app.platform.openExternal(telLink(c.phone!)), 'link', { 'data-testid': 'cust-phone-link' }));
   }
+  // Settled (₹0 after some entries): green, with "Send receipt" instead of the reminder.
+  const settled = balance === 0 && rows.length > 0;
+  const tone = settled ? 'settled' : toneClass(balance);
   const hero = h(
     'section',
-    { class: 'card hero', attrs: { 'data-testid': 'hero' } },
+    { class: `card hero${settled ? ' hero-settled' : ''}`, attrs: { 'data-testid': 'hero' } },
     h('div', 'hero-meta', metaBits),
     c.note ? h('div', { class: 'hero-meta', text: c.note }) : null,
-    h('div', { class: `hero-label ${toneClass(balance)}`, text: balanceLabel(balance) }),
-    balance !== 0 ? h('div', { class: `hero-amt ${toneClass(balance)}`, attrs: { 'data-testid': 'balance' }, text: money(balance) }) : h('div', { class: 'hero-amt zero', attrs: { 'data-testid': 'balance' }, text: formatINR(0) }),
+    h('div', { class: `hero-label ${tone}`, text: balanceLabel(balance) }),
+    balance !== 0 ? h('div', { class: `hero-amt ${tone}`, attrs: { 'data-testid': 'balance' }, text: money(balance) }) : h('div', { class: `hero-amt ${tone}`, attrs: { 'data-testid': 'balance' }, text: formatINR(0) }),
     balance !== 0 ? h('div', { class: 'hero-words', text: amountInWords(Math.abs(balance), getLang()) }) : null,
   );
 
@@ -55,7 +58,9 @@ export const customerScreen: Screen = async (root, route) => {
   const actions = h(
     'div',
     'actions3',
-    h('button', { class: 'act', attrs: { type: 'button', disabled: !!c.erased_at, 'data-testid': 'act-remind' }, on: { click: () => void remind() } }, icon('chat'), t('det.remind')),
+    settled
+      ? h('button', { class: 'act act-receipt', attrs: { type: 'button', disabled: !!c.erased_at, 'data-testid': 'act-receipt' }, on: { click: () => void router.go('statement', { id: c.id }) } }, icon('check'), t('det.sendReceipt'))
+      : h('button', { class: 'act', attrs: { type: 'button', disabled: !!c.erased_at, 'data-testid': 'act-remind' }, on: { click: () => void remind() } }, icon('chat'), t('det.remind')),
     h('button', { class: 'act', attrs: { type: 'button', 'data-testid': 'act-statement' }, on: { click: () => void router.go('statement', { id: c.id }) } }, icon('doc'), t('det.statement')),
     h(
       'button',
@@ -140,7 +145,7 @@ function entryRow(r: EntryView, byId: Map<string, EntryView>, paired: boolean, o
       'span',
       'entry-side',
       h('span', { class: `entry-amt amt ${tone}`, text: amountText }),
-      struck ? null : h('span', { class: 'entry-run', text: t('bal.short', { amount: (r.running_paise < 0 ? '−' : '') + formatINR(Math.abs(r.running_paise)) }) }),
+      struck ? null : h('span', { class: 'entry-run', text: r.running_paise === 0 ? t('bal.short', { amount: formatINR(0) }) : signedBal(r.running_paise) }),
     ),
   );
 }
@@ -184,8 +189,12 @@ function onEntryTap(c: Customer, r: EntryView, owner: boolean): void {
   });
 }
 
+/** The whole balance phrase, never a bare or minus amount: "நிலுவை ₹500" / "முன்பணம் ₹50" / "கணக்கு முடிந்தது".
+ *  Toasts put it after a "·" with no word of their own, so an advance can never read as money owed. */
 export function signedBal(paise: number): string {
-  return paise < 0 ? `${t('bal.advance')} ${formatINR(-paise)}` : formatINR(paise);
+  if (paise > 0) return t('bal.short', { amount: formatINR(paise) });
+  if (paise < 0) return `${t('bal.advance')} ${formatINR(-paise)}`;
+  return t('bal.settled');
 }
 
 function openMenu(c: Customer, balance: number, owner: boolean): void {
