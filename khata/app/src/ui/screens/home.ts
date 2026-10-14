@@ -39,7 +39,7 @@ function sortRows(rows: HomeRow[], sort: Sort): HomeRow[] {
 function daysText(r: HomeRow): { text: string; late: boolean } | null {
   if (r.days_since === null) return null;
   if (r.balance_paise > 0) {
-    if (r.last_payment === null) return { text: t('home.unpaidFor', { n: r.days_since }), late: r.days_since >= 30 };
+    if (r.last_payment === null) return r.days_since > 0 ? { text: t('home.unpaidFor', { n: r.days_since }), late: r.days_since >= 30 } : null;
     return { text: r.days_since === 0 ? t('home.paidToday') : t('home.paidAgo', { n: r.days_since }), late: r.days_since >= 30 };
   }
   if (r.last_payment !== null) return { text: r.days_since === 0 ? t('home.paidToday') : t('home.paidAgo', { n: r.days_since }), late: false };

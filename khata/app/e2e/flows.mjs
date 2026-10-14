@@ -313,6 +313,7 @@ async function main() {
     await pin('1234');
     await pin('1234');
     check((await toast()) === 'PIN saved', 'PIN saved');
+    await page.waitForTimeout(1000); // the browser preview persists sql.js to IndexedDB 300 ms after a write
     await page.reload();
     await page.locator('.gate.pin-gate').waitFor();
     check((await text('.gate h2')) === 'Enter PIN', 'lock screen on cold start');

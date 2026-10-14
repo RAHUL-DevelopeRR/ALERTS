@@ -688,3 +688,8 @@ select.input { appearance: none; -webkit-appearance: none; }
   font-size: 17px;
   font-weight: 800;
 }
+
+/* spans inside row buttons stack as lines */
+.cust-name, .cust-sub, .cust-bal, .cust-days,
+.entry-kind, .entry-meta, .entry-amt, .entry-run,
+.sheet-label, .set-row .sub { display: block; }
