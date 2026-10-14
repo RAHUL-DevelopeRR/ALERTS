@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kadan-kanakku-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "khata",
+      // Replace with the id printed by: npx wrangler d1 create khata --location=apac
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "DAILY_REQUEST_CAP": "5000",
+    "PAIR_THROTTLE_AFTER": "20"
+  }
+  // Secrets (never in this file):
+  //   npx wrangler secret put PEPPER      (required)
+  //   npx wrangler secret put SETUP_KEY   (optional; /v1/setup answers 404 without it)
+}
