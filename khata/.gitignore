@@ -16,3 +16,4 @@ keystore.properties
 # Test artefacts
 app/test-results/
 app/playwright-report/
+release/
