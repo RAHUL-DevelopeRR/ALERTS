@@ -86,7 +86,7 @@ describe('configuration', () => {
     const body = (await res.json()) as { results: { status: string }[] };
     expect(body.results.every((r) => r.status === 'stored')).toBe(true);
     expect(stats.queries).toBeLessThan(50);
-    expect(stats.maxParams).toBeLessThan(100);
+    expect(stats.maxParams).toBeLessThan(50);
     expect(stats.roundTrips).toBeLessThanOrEqual(3); // auth batch, pre-check batch, write batch
     // a resend: everything 'already', plus the one seq lookup
     const { db: db2, stats: stats2 } = countingDb(env.DB);

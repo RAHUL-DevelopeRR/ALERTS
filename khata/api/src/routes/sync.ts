@@ -147,7 +147,7 @@ syncRoutes.post('/sync/push', auth, async (c) => {
     const reason = validateCustomer(x, prev);
     if (reason) {
       reject('customers', x.id, reason);
-      //MUT knownCust.delete(x.id); // its entries in this chunk answer UNKNOWN_CUSTOMER (retriable), never a FK failure
+      knownCust.delete(x.id); // its entries in this chunk answer UNKNOWN_CUSTOMER (retriable), never a FK failure
       continue;
     }
     const row: CustomerDb = {

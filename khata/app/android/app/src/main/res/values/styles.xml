@@ -1,22 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
-        <!-- Customize your theme here. -->
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorAccent">@color/colorAccent</item>
     </style>
 
-    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <!--
+      Theme of the running app (BridgeActivity switches to it in onCreate).
+      windowBackground must stay a plain colour: Capacitor's SystemBars plugin copies it to the decor view, and that
+      colour is what shows behind the status and navigation bars while the WebView is padded away from them.
+      Bar colours/light-icon flags only take effect on Android 14 and lower; Android 15+ is always edge-to-edge and
+      SystemBars (capacitor.config.ts, style DARK = light icons) handles it.
+    -->
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.Light.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <item name="android:windowBackground">@color/brand_green</item>
+        <item name="android:statusBarColor">@color/brand_green</item>
+        <item name="android:navigationBarColor">@color/brand_green</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">false</item>
     </style>
 
-
+    <!--
+      Launch theme. Android 12+: the system splash draws windowSplashScreenBackground + the icon.
+      Android 7-11: the window background (drawable/splash.xml: green + centred icon) is shown until the WebView paints.
+    -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/brand_green</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+        <item name="android:windowBackground">@drawable/splash</item>
+        <item name="android:statusBarColor">@color/brand_green</item>
+        <item name="android:navigationBarColor">@color/brand_green</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>
