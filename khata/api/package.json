@@ -1,0 +1,24 @@
+{
+  "name": "kadan-kanakku-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply khata --local",
+    "db:migrate:remote": "wrangler d1 migrations apply khata --remote",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.1",
+    "@cloudflare/workers-types": "^5.20261014.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.150.0"
+  }
+}
