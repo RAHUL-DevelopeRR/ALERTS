@@ -9,6 +9,8 @@ export interface Bindings {
   SETUP_KEY?: string;
   DAILY_REQUEST_CAP?: string;
   PAIR_THROTTLE_AFTER?: string;
+  /** Workers Rate Limiting binding: per-client-IP first layer in front of /pair. Optional. */
+  PAIR_LIMITER?: RateLimit;
 }
 
 /** The authenticated device, as returned by the auth UPDATE ... RETURNING. */

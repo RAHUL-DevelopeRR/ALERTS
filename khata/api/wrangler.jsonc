@@ -13,6 +13,9 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Per-client-IP first layer in front of POST /v1/pair (Workers Rate Limiting; per location, best effort).
+  // namespace_id is any positive integer unique within the account.
+  "ratelimits": [{ "name": "PAIR_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
   "vars": {
     "DAILY_REQUEST_CAP": "5000",
     "PAIR_THROTTLE_AFTER": "20"

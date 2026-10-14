@@ -149,12 +149,19 @@ describe('push: customer rejections', () => {
     const pay = entry(k.id, 'RECEIVE', 1000);
     const r2 = await push(o.token, { customers: [archived], entries: [pay] });
     expect(r2.body.results.map((x) => x.status)).toEqual(['stored', 'stored']);
-    // archived and zero; a GIVE in the same chunk as a fresh archive of another customer is refused
+    // archived and zero; a GIVE in the same chunk as a fresh archive of another customer refuses the archive, and the
+    // GIVE itself is stored (the customer is on the server, so UNKNOWN_CUSTOMER would only delay it)
     const m = customer();
     await push(o.token, { customers: [m] });
     const r3 = await push(o.token, { customers: [{ ...m, archived_at: new Date().toISOString() }], entries: [entry(m.id, 'GIVE', 50)] });
     expect(r3.body.results[0]).toMatchObject({ status: 'rejected', reason: 'ARCHIVE_NONZERO' });
-    expect(r3.body.results[1]).toMatchObject({ status: 'rejected', reason: 'UNKNOWN_CUSTOMER' });
+    expect(r3.body.results[1]).toMatchObject({ status: 'stored' });
+    const mRow = await env.DB.prepare('SELECT archived_at FROM customers WHERE id = ?').bind(m.id).first<any>();
+    expect(mRow.archived_at).toBeNull();
+    // a NEW customer pushed archived with money in the same chunk: refused, and its entries wait (UNKNOWN_CUSTOMER)
+    const n = customer({ archived_at: new Date().toISOString() });
+    const r4 = await push(o.token, { customers: [n], entries: [entry(n.id, 'GIVE', 70)] });
+    expect(r4.body.results.map((x) => x.reason)).toEqual(['ARCHIVE_NONZERO', 'UNKNOWN_CUSTOMER']);
   });
 
   it('staff archive or unarchive -> FORBIDDEN_ROLE; staff WRITEOFF -> FORBIDDEN_ROLE', async () => {
@@ -194,11 +201,14 @@ describe('push: customer rejections', () => {
     expect(row).toEqual({ name: er.body.customer.name, phone: null });
     // entries for an erased customer are kept and still accepted
     expect((await push(s.token, { entries: [entry(k.id, 'RECEIVE', 900)] })).body.results[0]!.status).toBe('stored');
+    // since=0 also returns staff's own create row; every change carries the CURRENT (erased) content
     const p = await call('GET', '/sync/pull?since=0', { token: s.token });
     const erased = p.body.changes.filter((ch: any) => ch.tbl === 'customers' && ch.row.id === k.id);
-    expect(erased).toHaveLength(1);
-    expect(erased[0].row.erased_at).not.toBeNull();
-    expect(erased[0].row.phone).toBeNull();
+    expect(erased).toHaveLength(2);
+    for (const ch of erased) expect(ch.row).toMatchObject({ phone: null, name: er.body.customer.name });
+    expect(erased[1].row.erased_at).not.toBeNull();
+    const inc = await call('GET', `/sync/pull?since=${erased[0].seq}`, { token: s.token });
+    expect(inc.body.changes.filter((ch: any) => ch.tbl === 'customers' && ch.row.id === k.id)).toHaveLength(1);
   });
 });
 
@@ -351,12 +361,12 @@ describe('push: un-archive', () => {
     const s = await addDevice(o.token, 'staff');
     const k = customer();
     await push(o.token, { customers: [k] });
-    await push(o.token, { customers: [{ ...k, archived_at: new Date().toISOString() }] });
+    const ar = await push(o.token, { customers: [{ ...k, archived_at: new Date().toISOString() }] });
     const g = entry(k.id, 'GIVE', 80000);
     expect((await push(s.token, { entries: [g] })).body.results[0]!.status).toBe('stored');
     const row = await env.DB.prepare('SELECT archived_at FROM customers WHERE id = ?').bind(k.id).first<any>();
     expect(row.archived_at).toBeNull();
-    const p = await call('GET', '/sync/pull?since=0', { token: o.token });
+    const p = await call('GET', `/sync/pull?since=${ar.body.results[0]!.seq}`, { token: o.token });
     const kinds = p.body.changes.map((ch: any) => `${ch.tbl}:${ch.row.id === k.id ? 'K' : 'E'}`);
     expect(kinds).toEqual(['entries:E', 'customers:K']);
     expect(p.body.changes[1].row.archived_at).toBeNull();

@@ -58,5 +58,12 @@ export function randomRecoveryCode(): string {
   return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}`;
 }
 
-/** Pairing/recovery code as hashed: spaces and dashes removed, upper case. */
-export const normaliseCode = (s: string): string => s.replace(/[\s-]+/g, '').toUpperCase();
+/**
+ * Pairing/recovery code as hashed: spaces and dashes removed, upper case. A 16-character (recovery) code is read the
+ * Crockford way: the look-alike letters a person may type from the printed page map to digits (O -> 0, I/L -> 1);
+ * the alphabet has no I, L or O, so generated codes are unchanged. 8-digit codes are untouched.
+ */
+export function normaliseCode(s: string): string {
+  const t = s.replace(/[\s-]+/g, '').toUpperCase();
+  return t.length === 16 ? t.replace(/O/g, '0').replace(/[IL]/g, '1') : t;
+}

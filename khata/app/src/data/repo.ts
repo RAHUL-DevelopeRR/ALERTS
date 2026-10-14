@@ -920,7 +920,6 @@ export class SqlRepo implements Repo {
           [left],
         )
         : [];
-      this.batchMaxN.clear();
       for (const r of cRows) this.batchMaxN.set(`customers:${s(r.id)}`, n(r.max_n));
       for (const r of eRows) this.batchMaxN.set(`entries:${s(r.id)}`, n(r.max_n));
       return {

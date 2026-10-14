@@ -74,18 +74,25 @@ describe('review: server-side un-archive is invisible to the device that caused 
     expect(sawUnarchive).toBe(true);
   });
 
-  it('consequence: staff renaming the customer from its stale (archived) copy is refused FORBIDDEN_ROLE', async () => {
+  // Corrected: the original version renamed from the stale archived copy WITHOUT the pull that follows every push in
+  // the sync cycle (and the app already clears archived_at locally when it posts an entry). With the un-archive now
+  // logged as 'server', the pull delivers it, and a rename from the pulled row is accepted.
+  it('consequence: after its sync cycle (push, then pull) staff renames from the un-archived row and is accepted', async () => {
     const o = await owner();
     const s = await addDevice(o.token, 'staff');
     const k = customer();
     await push(o.token, { customers: [k] });
     const archived = { ...k, archived_at: new Date().toISOString(), updated_at: new Date().toISOString() };
     await push(o.token, { customers: [archived] });
+    const sp = await pull(s.token, 0);
     await push(s.token, { entries: [entry(k.id, 'GIVE', 2500)] });
-    // staff never saw the un-archive; it renames from its local (still archived) row
-    const rename = { ...archived, name: 'Kamala S', updated_at: new Date().toISOString() };
+    const after = await pull(s.token, sp.body.next_since);
+    const local = after.body.changes.find((ch) => ch.tbl === 'customers' && ch.row.id === k.id)?.row as typeof archived;
+    expect(local.archived_at).toBeNull();
+    const rename = { ...local, name: 'Kamala S', updated_at: new Date().toISOString() };
     const r = await push(s.token, { customers: [rename] });
-    expect(r.body.results[0]).toEqual(expect.objectContaining({ status: 'stored', reason: undefined }));
+    expect(r.body.results[0]).toMatchObject({ status: 'stored' });
+    expect(r.body.results[0]!.reason).toBeUndefined();
   });
 });
 
@@ -115,7 +122,8 @@ describe('review: UNKNOWN_CUSTOMER means "not on server"', () => {
     const g = entry(k.id, 'GIVE', 999);
     const r = await push(o.token, { customers: [{ ...k, name: 'Kamala S', updated_at: new Date().toISOString() }], entries: [g] });
     expect(r.body.results[0]).toMatchObject({ reason: 'ERASED' });
-    expect(r.body.results[1]).toEqual(expect.objectContaining({ id: g.id, status: 'stored', reason: undefined }));
+    expect(r.body.results[1]).toMatchObject({ id: g.id, status: 'stored' });
+    expect(r.body.results[1]!.reason).toBeUndefined();
   });
 });
 

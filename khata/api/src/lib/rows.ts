@@ -58,9 +58,14 @@ function sameFields(a: Record<string, unknown>, b: Record<string, unknown>, fiel
   return true;
 }
 
-/** Same client-owned content (server-filled fields excluded), for idempotent replays. */
+/**
+ * Same client-owned content (server-filled fields excluded), for idempotent replays. created_at is left out: the
+ * server keeps the first stored value on every update, so comparing it would turn each resend of an edit that
+ * carries a different created_at into a fresh 'stored' with a new seq.
+ */
+const CUSTOMER_REPLAY_FIELDS = CUSTOMER_CANONICAL_FIELDS.filter((f) => f !== 'created_at');
 export const sameCustomer = (stored: CustomerRow, pushed: Record<string, unknown>) =>
-  sameFields(stored as unknown as Record<string, unknown>, pushed, CUSTOMER_CANONICAL_FIELDS);
+  sameFields(stored as unknown as Record<string, unknown>, pushed, CUSTOMER_REPLAY_FIELDS);
 
 export const sameEntry = (stored: EntryRow, pushed: Record<string, unknown>) =>
   sameFields(stored as unknown as Record<string, unknown>, pushed, ENTRY_CANONICAL_FIELDS);

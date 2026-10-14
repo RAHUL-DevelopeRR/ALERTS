@@ -1,0 +1,162 @@
+/** Add / edit customer: name (required), mobile (optional, duplicate warning), note. "Save & add credit" first. */
+import { cleanName, formatCode, formatPhone, normalizePhone, normName } from '../../core/ledger';
+import type { Customer } from '../../data/types';
+import { t } from '../../i18n';
+import { afterWrite, app } from '../app';
+import { button, clear, h } from '../components/dom';
+import { dialog, toast } from '../components/overlay';
+import { shell, showFooter } from '../components/shell';
+import { errorText, errorCode } from '../errors';
+import * as router from '../router';
+import type { Screen } from '../router';
+import { rowDetail } from './home';
+
+export const customerEditScreen: Screen = async (root, route) => {
+  const id = route.params.id;
+  const existing = id ? await app.repo.getCustomer(id) : null;
+  if (id && !existing) throw new Error('NOT_FOUND');
+  const { body, footer } = shell(root, { title: existing ? t('cust.edit') : t('cust.new'), back: true });
+
+  const nameIn = h('input', { class: 'input', attrs: { type: 'text', placeholder: t('cust.namePh'), autocomplete: 'off', autocapitalize: 'words', maxlength: 100, enterkeyhint: 'next', 'data-testid': 'cust-name' } });
+  const phoneIn = h('input', { class: 'input', attrs: { type: 'tel', inputmode: 'tel', placeholder: t('cust.phonePh'), autocomplete: 'off', maxlength: 20, enterkeyhint: 'next', 'data-testid': 'cust-phone' } });
+  const noteIn = h('input', { class: 'input', attrs: { type: 'text', placeholder: t('cust.notePh'), autocomplete: 'off', maxlength: 200, enterkeyhint: 'done', 'data-testid': 'cust-note' } });
+  nameIn.value = existing?.name ?? route.params.name ?? '';
+  phoneIn.value = existing?.phone ? formatPhone(existing.phone) : '';
+  noteIn.value = existing?.note ?? '';
+  const nameErr = h('div', 'inline-warn hidden');
+  const phoneWarn = h('div', { class: 'inline-warn hidden', attrs: { 'data-testid': 'phone-warn' } });
+
+  let phoneTimer: ReturnType<typeof setTimeout> | null = null;
+  const checkPhone = async (): Promise<void> => {
+    let p: string | null = null;
+    try {
+      p = normalizePhone(phoneIn.value);
+    } catch {
+      p = null;
+    }
+    clear(phoneWarn);
+    phoneWarn.classList.add('hidden');
+    if (!p) return;
+    const others = await app.repo.findByPhone(p, id);
+    if (!others.length) return;
+    const o = others[0];
+    phoneWarn.append(
+      t('cust.phoneTaken', { name: o.name, code: formatCode(o.code) }),
+      button(t('cust.openThem'), () => void router.replace('customer', { id: o.id }), 'link'),
+    );
+    phoneWarn.classList.remove('hidden');
+  };
+  phoneIn.addEventListener('input', () => {
+    if (phoneTimer) clearTimeout(phoneTimer);
+    phoneTimer = setTimeout(() => void checkPhone(), 250);
+  });
+  phoneIn.addEventListener('blur', () => {
+    try {
+      const p = normalizePhone(phoneIn.value);
+      if (p) phoneIn.value = formatPhone(p);
+    } catch {
+      /* shown on save */
+    }
+  });
+  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') phoneIn.focus(); });
+  phoneIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') noteIn.focus(); });
+  noteIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') void app.platform.hideKeyboard(); });
+  if (existing?.phone) void checkPhone();
+
+  body.append(
+    h('label', 'field', h('span', { class: 'field-label', text: t('cust.name') }), nameIn, nameErr),
+    h('label', 'field', h('span', { class: 'field-label', text: `${t('cust.phone')} (${t('common.optional')})` }), phoneIn, phoneWarn),
+    h('label', 'field', h('span', { class: 'field-label', text: `${t('cust.note')} (${t('common.optional')})` }), noteIn),
+  );
+
+  let saving = false;
+  const showErr = (el: HTMLElement, msg: string): void => {
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  };
+
+  const save = async (thenCredit: boolean): Promise<void> => {
+    if (saving) return;
+    nameErr.classList.add('hidden');
+    let name: string;
+    try {
+      name = cleanName(nameIn.value);
+    } catch {
+      showErr(nameErr, t('err.BAD_NAME'));
+      nameIn.focus();
+      return;
+    }
+    let phone: string | null;
+    try {
+      phone = normalizePhone(phoneIn.value);
+    } catch {
+      phoneWarn.classList.remove('hidden');
+      clear(phoneWarn);
+      phoneWarn.textContent = t('err.BAD_PHONE');
+      phoneIn.focus();
+      return;
+    }
+    saving = true;
+    for (const b of footer.querySelectorAll('button')) b.disabled = true;
+    try {
+      if (!existing || normName(existing.name) !== normName(name)) {
+        const same = await app.repo.findBySameName(name, id);
+        if (same.length) {
+          const choice = await sameNameDialog(same);
+          if (choice === null) return;
+          if (choice !== 'new') {
+            await router.replace('customer', { id: choice });
+            return;
+          }
+        }
+      }
+      if (existing) {
+        await app.repo.updateCustomer(existing.id, { name, phone, note: noteIn.value });
+        afterWrite();
+        toast(t('cust.saved'));
+        router.back();
+        return;
+      }
+      const c = await app.repo.createCustomer({ name, phone, note: noteIn.value });
+      afterWrite();
+      toast(t('cust.savedAs', { code: formatCode(c.code) }));
+      await router.replace('customer', { id: c.id });
+      if (thenCredit) await router.go('entry', { id: c.id, kind: 'GIVE' });
+    } catch (e) {
+      const code = errorCode(e);
+      if (code === 'BAD_NAME') showErr(nameErr, errorText(e));
+      else toast(errorText(e), { error: true });
+    } finally {
+      saving = false;
+      for (const b of footer.querySelectorAll('button')) b.disabled = false;
+    }
+  };
+
+  if (existing) {
+    showFooter(footer, button(t('common.save'), () => void save(false), 'btn btn-primary btn-big btn-block', { 'data-testid': 'cust-save' }));
+  } else {
+    showFooter(
+      footer,
+      h(
+        'div',
+        'footer-row',
+        button(t('common.save'), () => void save(false), 'btn btn-big', { 'data-testid': 'cust-save' }),
+        button(t('cust.saveAndCredit'), () => void save(true), 'btn btn-gave btn-big', { 'data-testid': 'cust-save-credit' }),
+      ),
+    );
+  }
+  if (!existing) setTimeout(() => (nameIn.value ? phoneIn : nameIn).focus(), 50);
+};
+
+/** "There is already a Murugan (C-0017, note). Open existing / Add new". Returns an id, 'new', or null (cancel). */
+async function sameNameDialog(same: Customer[]): Promise<string | 'new' | null> {
+  const first = same[0];
+  const buttons = same.slice(0, 3).map((c) => ({ label: `${t('cust.openExisting', { code: formatCode(c.code) })}${c.note ? ` · ${c.note}` : ''}`, value: c.id as string | null }));
+  return dialog<string | null>({
+    title: t('cust.sameNameTitle'),
+    body: h('p', { text: t('cust.sameName', { name: first.name, detail: rowDetail(first).replace(' · ', ', ') }) }),
+    buttons: [...buttons, { label: t('cust.addNew'), value: 'new', kind: 'primary' }, { label: t('common.cancel'), value: null }],
+    dismissValue: null,
+    vertical: true,
+  });
+}

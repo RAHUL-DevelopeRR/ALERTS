@@ -122,11 +122,12 @@ export interface SetupResponse { shop: ShopInfo; code: string; expires_at: strin
 /**
  * POST /v1/pair  (no bearer token; throttled, see API README)
  * `code` = an 8-digit pairing code or an owner recovery code (XXXX-XXXX-XXXX-XXXX; dashes/spaces/case ignored).
- * `max_local_code` = highest customer code this phone allocated before pairing; the server raises its
- *   customer-code sequence to at least this before issuing the first block, so codes never collide.
+ * `max_local_code` = highest customer code this phone allocated before pairing (0..1,000,000, else 400); the server
+ *   raises its customer-code sequence to at least this before issuing the first block, so codes never collide.
  * `previous_device_id` = this phone's old device id (if it was paired before); revoked in the same batch
- *   when it belongs to the same shop.
- * Errors: 400 bad_request, 403 invalid_code (unknown/used/expired), 429 throttled.
+ *   when it belongs to the same shop and its role is not above the claimed code's (a staff code never revokes an
+ *   owner phone). The unused codes the old row issued (e.g. printed recovery codes) move to the new device.
+ * Errors: 400 bad_request, 403 invalid_code (unknown/used/expired), 429 throttled. Recovery codes are never throttled.
  */
 export interface PairRequest {
   code: string;
@@ -160,7 +161,10 @@ export interface CodeBlockResponse extends Envelope { start: number; end: number
 /** GET /v1/devices  (owner) */
 export interface DevicesResponse extends Envelope { devices: DeviceInfo[] }
 
-/** POST /v1/devices/:id/revoke  (owner). A device cannot revoke itself (400). */
+/**
+ * POST /v1/devices/:id/revoke  (owner). A device cannot revoke itself (400). The unused pair and recovery codes the
+ * revoked device issued are deleted in the same transaction (re-issue recovery codes if it minted the printed ones).
+ */
 export interface RevokeRequest { wipe?: boolean }
 export interface OkResponse extends Envelope { ok: true }
 
@@ -178,6 +182,10 @@ export interface EraseResponse extends Envelope { customer: CustomerRow }
 /**
  * POST /v1/sync/push  (any). At most MAX_PUSH_ROWS rows (413 otherwise).
  * Customers are processed before entries. Each row gets exactly one result.
+ * 500 batch_failed: a constraint failed inside the write batch (the client halves the chunk; a single-row chunk gets
+ * BATCH_FAILED instead). 503 unavailable: transient database trouble, retry later (nothing is rejected).
+ * When an accepted entry un-archives its customer, the server logs that change with device_id 'server', so every
+ * device (including the pushing one) receives it through pull.
  */
 export interface PushRequest { customers: CustomerRow[]; entries: EntryRow[] }
 export type PushStatus = 'stored' | 'already' | 'rejected';
@@ -219,7 +227,8 @@ export const RETRIABLE_REASONS: ReadonlySet<RejectReason> = new Set<RejectReason
 
 /**
  * GET /v1/sync/pull?since=<seq>&limit=<n>  (any)
- * Returns change-log rows with seq > since, EXCLUDING rows authored by the calling device, in seq order,
+ * Returns change-log rows with seq > since, EXCLUDING rows authored by the calling device (except when since=0: a
+ * full re-pull, e.g. after the local database was rebuilt, includes the caller's own rows), in seq order,
  * each joined to the row's CURRENT content. `next_since` = last seq examined in this page (advance the
  * cursor to it even if every row in the page was filtered out). Also returns the device list and shop.
  */

@@ -1,9 +1,9 @@
 /**
  * Adversarial review of the money ledger (push / pull / erase / code blocks) and of the D1 limits.
  *
- * Convention: tests named `BUG-n` assert the CURRENT faulty behaviour, so they pass today and go red once the
- * defect is fixed (then flip the assertion to the correct behaviour noted in the comment). Tests named `OK`
- * are attacks the Worker already resists; they guard the invariant.
+ * Convention: tests named `FIXED-n` reproduce defect BUG-n of the review and assert the corrected behaviour (they
+ * asserted the faulty behaviour until it was fixed). Tests named `OK` are attacks the Worker already resisted; they
+ * guard the invariant.
  *
  * Races are made deterministic by running one request through app.fetch() with a D1 wrapper that parks a chosen
  * db.batch() call (auth = 1st batch, push pre-check = 2nd, push write = 3rd) until another request has finished.
@@ -68,7 +68,7 @@ const nowIso = () => new Date().toISOString();
 
 // ---------------------------------------------------------------------------------------------- archive
 describe('archive with a non-zero balance', () => {
-  it('BUG-1: a same-chunk entry that is itself REJECTED still counts toward ARCHIVE_NONZERO', async () => {
+  it('FIXED-1: a same-chunk entry that is itself REJECTED does not count toward ARCHIVE_NONZERO', async () => {
     const o = await owner();
     const k = customer();
     await push(o.token, { customers: [k], entries: [entry(k.id, 'GIVE', 100000)] });
@@ -76,25 +76,25 @@ describe('archive with a non-zero balance', () => {
     const fakeSettle = entry(k.id, 'RECEIVE', 100000, { biz_date: istToday(5) });
     const r = await push(o.token, { customers: [{ ...k, archived_at: nowIso(), updated_at: nowIso() }], entries: [fakeSettle] });
     expect(r.body.results.map((x) => [x.status, x.reason])).toEqual([
-      ['stored', undefined], // correct: ['rejected', 'ARCHIVE_NONZERO']
+      ['rejected', 'ARCHIVE_NONZERO'],
       ['rejected', 'FUTURE_DATE'],
     ]);
-    expect(await archivedAt(k.id)).not.toBeNull();
-    expect(await balance(k.id)).toBe(100000); // Rs 1,000 owed by a customer that is now hidden as archived
+    expect(await archivedAt(k.id)).toBeNull();
+    expect(await balance(k.id)).toBe(100000);
   });
 
-  it('BUG-2: the same entry id twice in one chunk is counted twice toward ARCHIVE_NONZERO', async () => {
+  it('FIXED-2: the same entry id twice in one chunk is counted once toward ARCHIVE_NONZERO', async () => {
     const o = await owner();
     const k = customer();
     await push(o.token, { customers: [k], entries: [entry(k.id, 'GIVE', 1000)] });
     const half = entry(k.id, 'RECEIVE', 500);
     const r = await push(o.token, { customers: [{ ...k, archived_at: nowIso(), updated_at: nowIso() }], entries: [half, half] });
-    expect(r.body.results.map((x) => x.status)).toEqual(['stored', 'stored', 'already']); // correct: archive rejected
-    expect(await archivedAt(k.id)).not.toBeNull();
+    expect(r.body.results.map((x) => x.reason ?? x.status)).toEqual(['ARCHIVE_NONZERO', 'stored', 'already']);
+    expect(await archivedAt(k.id)).toBeNull();
     expect(await balance(k.id)).toBe(500);
   });
 
-  it('BUG-3: an entry is accepted for an archived customer re-pushed (still archived) in the same chunk -> no un-archive', async () => {
+  it('FIXED-3: an entry accepted for an archived customer re-pushed (still archived) in the same chunk un-archives it', async () => {
     const o = await owner();
     const s = await addDevice(o.token, 'staff');
     const k = customer();
@@ -108,11 +108,11 @@ describe('archive with a non-zero balance', () => {
     });
     expect(r.body.results.map((x) => x.status)).toEqual(['stored', 'stored']);
     // plan: "un-archives a customer in the same batch whenever it accepts an entry for them"
-    expect(await archivedAt(k.id)).not.toBeNull(); // correct: null
+    expect(await archivedAt(k.id)).toBeNull();
     expect(await balance(k.id)).toBe(25000);
   });
 
-  it('BUG-4: archive racing a GIVE from another phone (pre-check and write are separate) -> archived with debt', async () => {
+  it('FIXED-4: archive racing a GIVE from another phone (pre-check and write are separate) -> ends un-archived', async () => {
     const o = await owner();
     const s = await addDevice(o.token, 'staff');
     const k = customer();
@@ -124,12 +124,19 @@ describe('archive with a non-zero balance', () => {
     // staff GIVE commits in between (K not archived yet -> no un-archive statement)
     expect((await push(s.token, { entries: [entry(k.id, 'GIVE', 80000)] })).body.results[0]!.status).toBe('stored');
     g.release();
-    expect((await archiving).body.results[0]!.status).toBe('stored'); // correct: ARCHIVE_NONZERO (guard in SQL)
-    expect(await archivedAt(k.id)).not.toBeNull();
+    // The archive write commits, then the in-batch guard sees the non-zero balance and un-archives (logged as 'server',
+    // so the archiving phone pulls the correction too).
+    const ar = (await archiving).body.results[0]!;
+    expect(ar.status).toBe('stored');
+    expect(await archivedAt(k.id)).toBeNull();
     expect(await balance(k.id)).toBe(80000);
+    const p = await pull(o.token, ar.seq);
+    expect(p.body.changes.filter((ch) => ch.tbl === 'customers').map((ch) => [ch.row.id, (ch.row as any).archived_at])).toEqual([
+      [k.id, null],
+    ]);
   });
 
-  it('BUG-5: the server-side un-archive is logged as authored by the pushing phone, which therefore never pulls it', async () => {
+  it('FIXED-5: the server-side un-archive is logged as authored by the server, so the pushing phone pulls it too', async () => {
     const o = await owner();
     const s = await addDevice(o.token, 'staff');
     const k = customer();
@@ -145,12 +152,13 @@ describe('archive with a non-zero balance', () => {
       `SELECT device_id FROM changelog WHERE tbl = 'customers' AND row_id = ? ORDER BY seq DESC LIMIT 1`,
       k.id,
     );
-    expect(log.device_id).toBe(s.device_id);
+    expect(log.device_id).toBe('server');
     const p1 = await pull(s.token, since);
-    expect(p1.body.changes.filter((ch) => ch.tbl === 'customers')).toHaveLength(0); // the staff phone never learns
-    // ...so its local copy stays archived, and its next harmless edit of K is refused for good
-    const edit = await push(s.token, { customers: [{ ...archived, phone: '+919000000009', updated_at: nowIso() }] });
-    expect(edit.body.results[0]).toMatchObject({ status: 'rejected', reason: 'FORBIDDEN_ROLE' });
+    const seen = p1.body.changes.filter((ch) => ch.tbl === 'customers');
+    expect(seen.map((ch) => [ch.row.id, (ch.row as any).archived_at])).toEqual([[k.id, null]]);
+    // ...so its next harmless edit of K (from the pulled row) is accepted
+    const edit = await push(s.token, { customers: [{ ...(seen[0]!.row as typeof archived), phone: '+919000000009', updated_at: nowIso() }] });
+    expect(edit.body.results[0]!.status).toBe('stored');
   });
 });
 
@@ -191,7 +199,7 @@ describe('reversals', () => {
     expect(await balance(m.id)).toBe(0);
   });
 
-  it('BUG-6: two phones reversing the same original concurrently -> BATCH_FAILED / 500, not ALREADY_REVERSED', async () => {
+  it('FIXED-6: two phones reversing the same original concurrently -> ALREADY_REVERSED, never BATCH_FAILED / 500', async () => {
     const o = await owner();
     const s = await addDevice(o.token, 'staff');
     const k = customer();
@@ -203,8 +211,8 @@ describe('reversals', () => {
     await gate.reached;
     expect((await push(s.token, { entries: [reversal(g)] })).body.results[0]!.status).toBe('stored');
     gate.release();
-    expect((await late).body.results[0]).toMatchObject({ status: 'rejected', reason: 'BATCH_FAILED' }); // correct: ALREADY_REVERSED
-    // multi-row chunk: the innocent rows in the chunk fail with it (500) and the client starts halving
+    expect((await late).body.results[0]).toMatchObject({ status: 'rejected', reason: 'ALREADY_REVERSED' });
+    // multi-row chunk: the innocent rows in the chunk are stored, the losing reversal is ALREADY_REVERSED
     const g2 = entry(k.id, 'GIVE', 200);
     await push(o.token, { entries: [g2] });
     const gate2 = gatedDb(env.DB, 3);
@@ -213,8 +221,11 @@ describe('reversals', () => {
     await gate2.reached;
     await push(s.token, { entries: [reversal(g2)] });
     gate2.release();
-    expect((await late2).status).toBe(500);
-    expect(await one<{ n: number }>('SELECT COUNT(*) AS n FROM entries WHERE id = ?', innocent.id)).toEqual({ n: 0 });
+    const l2 = await late2;
+    expect(l2.status).toBe(200);
+    expect(l2.body.results.map((x) => x.reason ?? x.status)).toEqual(['stored', 'ALREADY_REVERSED']);
+    expect(await one<{ n: number }>('SELECT COUNT(*) AS n FROM entries WHERE id = ?', innocent.id)).toEqual({ n: 1 });
+    expect(await one<{ n: number }>('SELECT COUNT(*) AS n FROM entries WHERE reverses_entry_id = ?', g2.id)).toEqual({ n: 1 });
     // the ledger invariant itself holds (UNIQUE entries_once): one reversal per original
     expect(await one<{ n: number }>('SELECT COUNT(*) AS n FROM entries WHERE reverses_entry_id = ?', g.id)).toEqual({ n: 1 });
   });
@@ -234,7 +245,7 @@ describe('double-post and lost writes', () => {
     expect(await one<{ n: number }>(`SELECT COUNT(*) AS n FROM changelog WHERE row_id = ?`, g.id)).toEqual({ n: 1 });
   });
 
-  it('BUG-7: a retry racing the in-flight original push -> both answer stored with different seqs, 2 log rows', async () => {
+  it('FIXED-7: a retry racing the in-flight original push -> one stored, the other already with the same seq, 1 log row', async () => {
     const o = await owner();
     const k = customer();
     await push(o.token, { customers: [k] });
@@ -246,39 +257,42 @@ describe('double-post and lost writes', () => {
     gate.release();
     const a = (await first).body.results[0]!;
     const b = retry.body.results[0]!;
-    expect([a.status, b.status]).toEqual(['stored', 'stored']); // correct: one of them 'already' with the same seq
-    expect(a.seq).not.toBe(b.seq);
-    expect(await balance(k.id)).toBe(4200); // money is not doubled (ON CONFLICT(id) DO NOTHING)...
-    expect(await one<{ n: number }>(`SELECT COUNT(*) AS n FROM changelog WHERE row_id = ?`, g.id)).toEqual({ n: 2 }); // ...but the log is
+    expect([a.status, b.status]).toEqual(['already', 'stored']);
+    expect(a.seq).toBe(b.seq);
+    expect(await balance(k.id)).toBe(4200);
+    expect(await one<{ n: number }>(`SELECT COUNT(*) AS n FROM changelog WHERE row_id = ?`, g.id)).toEqual({ n: 1 });
   });
 
-  it('BUG-8: a transient D1 error on a single-row push is answered as permanent BATCH_FAILED', async () => {
+  it('FIXED-8: a transient D1 error on a single-row push is a retriable 503, not a permanent BATCH_FAILED', async () => {
     const o = await owner();
     const k = customer();
     await push(o.token, { customers: [k] });
     const g = entry(k.id, 'GIVE', 50000);
     const flaky = gatedDb(env.DB, 3, { throwInstead: 'D1_ERROR: Network connection lost.' });
     const r = await pushVia(flaky.db, o.token, { entries: [g] });
-    // the client marks the row rejected -> excluded from every balance; correct: a retriable 5xx (503)
-    expect(r.status).toBe(200);
-    expect(r.body.results[0]).toMatchObject({ status: 'rejected', reason: 'BATCH_FAILED' });
+    expect(r.status).toBe(503);
+    expect(r.body.error).toBe('unavailable');
     expect(await balance(k.id)).toBe(0);
+    // a genuine constraint failure on a single row is still BATCH_FAILED
+    const broken = gatedDb(env.DB, 3, { throwInstead: 'D1_ERROR: CHECK constraint failed: entries: SQLITE_CONSTRAINT' });
+    const r2 = await pushVia(broken.db, o.token, { entries: [g] });
+    expect(r2.body.results[0]).toMatchObject({ status: 'rejected', reason: 'BATCH_FAILED' });
   });
 
-  it('BUG-9 (low): an upper-case copy of an entry id is a new entry -> the same money posted twice', async () => {
+  it('FIXED-9 (low): upper-case ids are BAD_ROW, so an upper-case copy can never post the same money twice', async () => {
     const o = await owner();
     const k = customer();
     const g = entry(k.id, 'GIVE', 10000);
     await push(o.token, { customers: [k], entries: [g] });
     const r = await push(o.token, { entries: [{ ...g, id: g.id.toUpperCase() }] });
-    expect(r.body.results[0]!.status).toBe('stored'); // correct: BAD_ROW (ids must be lower-case) or 'already'
-    expect(await balance(k.id)).toBe(20000);
-    // and an upper-case customer_id of an existing customer is UNKNOWN_CUSTOMER (retriable) forever
+    expect(r.body.results[0]).toMatchObject({ status: 'rejected', reason: 'BAD_ROW' });
+    expect(await balance(k.id)).toBe(10000);
+    // and an upper-case customer_id is BAD_ROW (permanent), not UNKNOWN_CUSTOMER (retried forever)
     const r2 = await push(o.token, { entries: [entry(k.id.toUpperCase(), 'GIVE', 1)] });
-    expect(r2.body.results[0]!.reason).toBe('UNKNOWN_CUSTOMER');
+    expect(r2.body.results[0]!.reason).toBe('BAD_ROW');
   });
 
-  it('BUG-10: a rejected update of an EXISTING customer turns its same-chunk entries into UNKNOWN_CUSTOMER', async () => {
+  it('FIXED-10: a rejected update of an EXISTING customer leaves its same-chunk entries acceptable', async () => {
     const o = await owner();
     const k = customer();
     await push(o.token, { customers: [k] });
@@ -288,7 +302,7 @@ describe('double-post and lost writes', () => {
     expect((await push(o.token, { entries: [entry(k.id, 'RECEIVE', 300)] })).body.results[0]!.status).toBe('stored');
     // ...but next to a (stale) customer row they answer UNKNOWN_CUSTOMER although K exists on the server
     const r = await push(o.token, { customers: [{ ...k, note: 'x', updated_at: nowIso() }], entries: [entry(k.id, 'RECEIVE', 200)] });
-    expect(r.body.results.map((x) => x.reason)).toEqual(['ERASED', 'UNKNOWN_CUSTOMER']); // correct: [ERASED, stored]
+    expect(r.body.results.map((x) => x.reason ?? x.status)).toEqual(['ERASED', 'stored']);
   });
 });
 
@@ -310,7 +324,7 @@ describe('erase', () => {
     expect(row.erased_at).not.toBeNull();
   });
 
-  it('BUG-11 (low): a customer edit racing an erase answers stored + seq, but the write was silently dropped', async () => {
+  it('FIXED-11 (low): a customer edit racing an erase answers ERASED (the write is skipped and not logged)', async () => {
     const o = await owner();
     const s = await addDevice(o.token, 'staff');
     const k = customer();
@@ -321,7 +335,9 @@ describe('erase', () => {
     expect((await call('POST', `/customers/${k.id}/erase`, { token: o.token })).status).toBe(200);
     gate.release();
     const res = (await edit).body.results[0]!;
-    expect(res.status).toBe('stored'); // correct: rejected ERASED
+    expect(res).toMatchObject({ status: 'rejected', reason: 'ERASED' });
+    expect(res.seq).toBeUndefined();
+    expect(await one<{ n: number }>(`SELECT COUNT(*) AS n FROM changelog WHERE row_id = ? AND device_id = ?`, k.id, s.device_id)).toEqual({ n: 0 });
     expect((await one<any>('SELECT phone FROM customers WHERE id = ?', k.id)).phone).toBeNull(); // personal data stays erased
   });
 });
@@ -349,26 +365,40 @@ describe('customer codes', () => {
     expect(r2.body.results.map((x) => x.status)).toEqual(['stored', 'stored']);
   });
 
-  it('BUG-12: any device can push seq.customer_code to the 1e9 ceiling; every later block is unusable (BAD_ROW)', async () => {
+  it('FIXED-12: max_local_code is capped far below the customer-code ceiling, so blocks always stay usable', async () => {
     const o = await owner();
     const s = await addDevice(o.token, 'staff');
-    const blk = await call('POST', '/devices/code-block', { token: s.token, body: { max_local_code: 1_000_000_000 } });
-    expect(blk.status).toBe(200);
-    expect(blk.body.start).toBe(1_000_000_001);
+    for (const path of ['/devices/code-block']) {
+      const blk = await call('POST', path, { token: s.token, body: { max_local_code: 1_000_000_000 } });
+      expect(blk.status).toBe(400);
+    }
+    const pc = await call('POST', '/devices/pair-code', { token: o.token, body: { role: 'staff' } });
+    expect((await call('POST', '/pair', { body: { code: pc.body.code, device_name: 'x', max_local_code: 1_000_001 } })).status).toBe(400);
+    // the highest accepted value still leaves usable codes
+    const top = await call('POST', '/devices/code-block', { token: s.token, body: { max_local_code: 1_000_000 } });
+    expect(top.status).toBe(200);
     const next = await call('POST', '/devices/code-block', { token: o.token, body: {} });
-    expect(next.body.start).toBeGreaterThan(1_000_000_000); // permanent: the sequence never goes down
     const k = customer({ code: next.body.start });
     const r = await push(o.token, { customers: [k], entries: [entry(k.id, 'GIVE', 100)] });
-    expect(r.body.results.map((x) => x.reason)).toEqual(['BAD_ROW', 'UNKNOWN_CUSTOMER']);
+    expect(r.body.results.map((x) => x.status)).toEqual(['stored', 'stored']);
   });
-  it('BUG-13: /pair with a STAFF code and previous_device_id = the owner\'s id revokes the owner phone', async () => {
+  it('FIXED-13: /pair with a STAFF code and previous_device_id = the owner\'s id does not revoke the owner phone', async () => {
     const o = await owner();
     const pc = await call('POST', '/devices/pair-code', { token: o.token, body: { role: 'staff' } });
     // device ids are visible to every phone (pull returns the device list)
     const r = await call('POST', '/pair', { body: { code: pc.body.code, device_name: 'Helper', previous_device_id: o.device_id } });
     expect(r.status).toBe(200);
     expect(r.body.role).toBe('staff');
-    expect((await call('GET', '/me', { token: o.token })).status).toBe(401); // correct: only same-role/own old row
+    expect((await call('GET', '/me', { token: o.token })).status).toBe(200);
+    // a staff code still replaces a staff phone's old row, and an owner code an owner phone's
+    const pc2 = await call('POST', '/devices/pair-code', { token: o.token, body: { role: 'staff' } });
+    const r2 = await call('POST', '/pair', { body: { code: pc2.body.code, device_name: 'Helper again', previous_device_id: r.body.device_id } });
+    expect(r2.status).toBe(200);
+    expect((await call('GET', '/me', { token: r.body.token })).status).toBe(401);
+    const pc3 = await call('POST', '/devices/pair-code', { token: o.token, body: { role: 'owner' } });
+    const r3 = await call('POST', '/pair', { body: { code: pc3.body.code, device_name: 'Owner, re-paired', previous_device_id: o.device_id } });
+    expect(r3.status).toBe(200);
+    expect((await call('GET', '/me', { token: o.token })).status).toBe(401);
   });
 });
 
@@ -485,6 +515,14 @@ describe('D1 limits', () => {
         WHERE l.shop_id = ?1 AND l.seq > ?2 AND l.seq <= ?3 AND l.device_id <> ?4 AND l.tbl = 'customers'`, 's', 0, 9, 'd'],
       [`SELECT l.seq AS _seq, e.* FROM changelog l JOIN entries e ON e.id = l.row_id
         WHERE l.shop_id = ?1 AND l.seq > ?2 AND l.seq <= ?3 AND l.device_id <> ?4 AND l.tbl = 'entries'`, 's', 0, 9, 'd'],
+      // push after the review fixes: unscoped primary-key pre-checks, write-time guards, change-log inserts
+      [`SELECT * FROM entries WHERE id IN (?,?)`, ...ids],
+      [`SELECT * FROM customers WHERE id IN (?,?)`, ...ids],
+      [`SELECT 1 FROM customers WHERE shop_id = ?1 AND code = ?2 AND id <> ?3`, 's', 1, 'a'],
+      [`SELECT 1 FROM changelog l WHERE l.shop_id = ?1 AND l.row_id = ?2`, 's', 'a'],
+      [`SELECT shop_id, id FROM customers WHERE shop_id = ?1 AND updated_by = ?2 AND received_at = ?3 AND id IN (?4,?5)`, 's', 'd', 't', ...ids],
+      [`SELECT id FROM customers c WHERE shop_id = ?1 AND archived_at IS NOT NULL AND (id IN (?2)
+        OR (id IN (?3) AND (SELECT COALESCE(SUM(delta_paise), 0) FROM entries WHERE customer_id = c.id) <> 0))`, 's', 'a', 'b'],
     ] as const;
     for (const [sql, ...b] of queries) {
       const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...b).all<{ detail: string }>();

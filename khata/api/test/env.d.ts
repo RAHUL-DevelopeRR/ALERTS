@@ -5,6 +5,7 @@ declare namespace Cloudflare {
     SETUP_KEY: string;
     DAILY_REQUEST_CAP: string;
     PAIR_THROTTLE_AFTER: string;
+    PAIR_LIMITER: RateLimit;
     TEST_MIGRATIONS: import('cloudflare:test').D1Migration[];
   }
 }

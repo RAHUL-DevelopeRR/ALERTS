@@ -1,7 +1,7 @@
 import type { EntryKind, RejectReason } from '../../../shared/protocol';
 import type { Json } from './http';
 import { addDays, isIsoTimestamp, isRealDate } from './time';
-import { isSafePositiveInt, isUuid } from './util';
+import { isSafePositiveInt, isUuid, MAX_CUSTOMER_CODE } from './util';
 
 const PHONE_RE = /^\+[0-9]{8,15}$/;
 const KINDS: ReadonlySet<string> = new Set<EntryKind>(['GIVE', 'RECEIVE', 'WRITEOFF', 'REVERSAL']);
@@ -14,7 +14,7 @@ const shortText = (max: number) => (v: unknown) => typeof v === 'string' && v.le
 /** Structural checks of a pushed customer (BAD_ROW); null when the shape is valid. */
 export function customerShape(x: Json): RejectReason | null {
   if (!isUuid(x.id)) return 'BAD_ROW';
-  if (!isSafePositiveInt(x.code, 1_000_000_000)) return 'BAD_ROW';
+  if (!isSafePositiveInt(x.code, MAX_CUSTOMER_CODE)) return 'BAD_ROW';
   if (typeof x.name !== 'string' || x.name.length > 200) return 'BAD_ROW';
   const n = x.name.trim().length;
   if (n < 1 || n > 100) return 'BAD_ROW';

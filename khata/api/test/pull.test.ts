@@ -9,11 +9,16 @@ describe('pull', () => {
     const s = await addDevice(o.token, 'staff');
     const k = customer();
     const g = entry(k.id, 'GIVE', 1000);
+    const first = await push(o.token, { customers: [customer()] });
     const pr = await push(o.token, { customers: [k], entries: [g] });
-    const mine = await pull(o.token, 0);
+    // own rows are skipped on an incremental pull (since > 0)...
+    const mine = await pull(o.token, first.body.results[0]!.seq);
     expect(mine.status).toBe(200);
     expect(mine.body.changes).toEqual([]);
-    const theirs = await pull(s.token, 0);
+    // ...but not on a full re-pull (since=0: local database rebuilt with the same token)
+    const full = await pull(o.token, 0);
+    expect(full.body.changes.map((ch) => ch.row.id)).toEqual([first.body.results[0]!.id, k.id, g.id]);
+    const theirs = await pull(s.token, first.body.results[0]!.seq);
     expect(theirs.body.changes.map((ch) => [ch.seq, ch.tbl, ch.row.id])).toEqual([
       [pr.body.results[0]!.seq, 'customers', k.id],
       [pr.body.results[1]!.seq, 'entries', g.id],
@@ -30,7 +35,7 @@ describe('pull', () => {
     const o = await owner();
     const k = customer();
     const pr = await push(o.token, { customers: [k], entries: [entry(k.id, 'GIVE', 5), entry(k.id, 'GIVE', 6)] });
-    const p = await pull(o.token, 0);
+    const p = await pull(o.token, pr.body.results[0]!.seq);
     expect(p.body.changes).toEqual([]);
     expect(p.body.has_more).toBe(false);
     expect(p.body.next_since).toBe(pr.body.results[2]!.seq);

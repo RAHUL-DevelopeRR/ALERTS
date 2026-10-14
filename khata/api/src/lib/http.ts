@@ -22,7 +22,7 @@ export async function readJson(c: Context<AppEnv>): Promise<unknown> {
   }
 }
 
-export function fail(c: Context<AppEnv>, status: 400 | 401 | 403 | 404 | 413 | 429 | 500, error: string, extra?: Omit<ApiError, 'error'>) {
+export function fail(c: Context<AppEnv>, status: 400 | 401 | 403 | 404 | 413 | 429 | 500 | 503, error: string, extra?: Omit<ApiError, 'error'>) {
   return c.json<ApiError>({ error, ...extra }, status);
 }
 

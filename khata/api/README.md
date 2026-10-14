@@ -82,32 +82,55 @@ Notes:
 |---|---|---|
 | `GET /health` | anyone | `SELECT 1`, `{ok:true}` |
 | `POST /setup` | `X-Setup-Key` | constant-time key check; creates the shop if none, else reuses the oldest; owner code, kind `setup`, 24 h |
-| `POST /pair` | anyone, throttled | claims the code atomically and, in the same transaction, creates the device, revokes `previous_device_id` (same shop), raises the customer-code sequence to `max_local_code` and issues a 50-code block |
+| `POST /pair` | anyone, throttled | claims the code atomically and, in the same transaction, creates the device, revokes `previous_device_id` (same shop, role not above the claimed code's; its unused codes move to the new device), raises the customer-code sequence to `max_local_code` (at most 1,000,000) and issues a 50-code block |
 | `GET /me` | any device | |
 | `POST /devices/pair-code` | owner | 8 uniformly random digits, kind `pair`, 10 min |
 | `POST /devices/recovery-codes` | owner | 3-5 codes `XXXX-XXXX-XXXX-XXXX` (base32 without I/L/O/U), no expiry, replaces unused ones |
-| `POST /devices/code-block` | any device | next 50 customer codes (raised to `max_local_code` first) |
-| `GET /devices`, `POST /devices/:id/revoke` | owner | `{wipe}` makes the revoked phone's next request answer `401 {error:'revoked', wipe:true}` |
+| `POST /devices/code-block` | any device | next 50 customer codes (raised to `max_local_code` first, at most 1,000,000) |
+| `GET /devices`, `POST /devices/:id/revoke` | owner | `{wipe}` makes the revoked phone's next request answer `401 {error:'revoked', wipe:true}`; the unused pair and recovery codes it issued are deleted in the same transaction (re-issue recovery codes if it minted the printed ones) |
 | `PUT /shop` | owner | name 1-80, UPI id or null, lang ta/en |
 | `POST /customers/:id/erase` | owner | DPDP erasure, terminal, one change-log row |
 | `POST /sync/push` | any device | at most 20 rows, see protocol.ts |
-| `GET /sync/pull?since&limit` | any device | at most 500 changes per page, own rows skipped |
+| `GET /sync/pull?since&limit` | any device | at most 500 changes per page, own rows skipped except on `since=0` |
 | `GET /export` | owner | streamed `ExportFile` JSON attachment |
 
-**Pair throttle.** Failed `/pair` attempts are counted per UTC day in `pair_failures` (this Worker serves one shop).
-Once the count reaches `PAIR_THROTTLE_AFTER`, one attempt per 30 s is let through (claimed atomically through
-`next_allowed_at`) and the rest get `429 {error:'throttled'}`. Codes are never burned or locked by failures.
+**Pair throttle.** Two layers. First, the `PAIR_LIMITER` Workers Rate Limiting binding allows 10 `/pair` requests
+per minute per client IP (`CF-Connecting-IP`). Second, 8-digit attempts are counted per UTC day in `pair_failures`
+(this Worker serves one shop): the body is validated first (a malformed request never touches the counter), then one
+atomic `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING` reserves the attempt. Below `PAIR_THROTTLE_AFTER` every
+attempt is allowed; past it one attempt per 30 s (`next_allowed_at`) is, the rest get `429 {error:'throttled'}`. A
+successful pairing gives its attempt back, so the count is the day's failures. 16-character recovery codes (80 bits)
+are never throttled or counted, so the owner's way back in cannot be blocked. Codes are never burned by failures.
+Recovery codes are read the Crockford way (O as 0, I/L as 1).
 
-**Push budget.** Auth (1 round trip: `UPDATE devices ... RETURNING` + shop `SELECT`), pre-checks (1 batch of at most 5
-indexed `SELECT`s), the write batch (1 transaction: `PRAGMA defer_foreign_keys`, row upserts, at most one un-archive
-`UPDATE`, change-log inserts of at most 20 rows with 3 + 2 bound parameters per row), and at most one indexed seq
-lookup for `already` rows. A 20-row push stays at or below 32 statements (Workers Free allows 50) and under 50 bound parameters per statement
-(`test/config.test.ts` measures it). A failing write batch answers `500 batch_failed` (the client halves its chunk);
-a single-row chunk answers 200 with that row `rejected: BATCH_FAILED`.
+**Setup.** Each `POST /setup` deletes the shop's earlier unused setup codes and logs a warning; only the newest code
+works. Delete the `SETUP_KEY` secret after handover.
+
+**Push.** Auth (1 round trip: `UPDATE devices ... RETURNING` + shop `SELECT`), pre-checks (1 batch of at most 5
+indexed `SELECT`s, rows looked up by primary key so another shop's ids are refused), classification in memory, the
+write batch (1 transaction: `PRAGMA defer_foreign_keys`, one guarded upsert/insert per row with `RETURNING id`, one
+change-log `INSERT ... SELECT ... RETURNING seq` for customers and one for entries, one un-archive `UPDATE` and its
+change-log insert), a follow-up batch of at most 3 `SELECT`s only when a write-time guard skipped a row, and at most
+one indexed seq lookup for `already` rows: at most 36 statements for a 20-row push (Workers Free allows 50), under 50
+bound parameters per statement (`test/review-ledger.test.ts` measures it).
+
+- `ARCHIVE_NONZERO` counts only the entries the chunk actually accepts, each id once.
+- Every write re-checks in SQL what the pre-check decided, so concurrent pushes from two phones are classified, never
+  failed: a code taken meanwhile answers `CODE_TAKEN`, a reversal that lost the race `ALREADY_REVERSED`, an edit that
+  raced an erase `ERASED`, an entry stored meanwhile by a retry `already` (one change-log row per entry, ever).
+- Un-archiving is decided at write time: any archived customer that received an accepted entry is un-archived (unless
+  this chunk archives it at a zero balance), and an archive whose customer has a non-zero balance once the batch
+  commits (another phone's entry landed in between) is undone. These changes are logged with `device_id = 'server'`,
+  so every phone pulls them, including the one whose push caused them.
+- A write batch that fails on a constraint answers `500 batch_failed` (the client halves its chunk); a single-row chunk
+  answers 200 with that row `rejected: BATCH_FAILED`. Any other database error answers `503 unavailable` (retriable).
+- Ids must be lower-case UUIDs (`BAD_ROW` otherwise), so a re-cased copy can never be stored twice.
 
 **Pull.** The page and `MAX(seq)` come from one batch (same snapshot). Row content is fetched with seq-range joins
-(`changelog JOIN customers/entries ON seq IN (since, last]`), never with large `IN` lists. Every change carries the
-row's current content, in seq order, so a customer always arrives before its entries.
+(`changelog JOIN customers/entries ON seq IN (since, last]`, same shop), never with large `IN` lists. Every change
+carries the row's current content, in seq order, so a customer always arrives before its entries. The caller's own
+rows are skipped, except on `since=0`: a phone that rebuilt its local database with the same token must get its own
+customers back before other phones' entries on them.
 
 ## Backups and restore runbook
 

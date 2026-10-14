@@ -92,12 +92,24 @@ deviceRoutes.post('/devices/:id/revoke', auth, ownerOnly, async (c) => {
   const dev = c.get('device');
   if (id === dev.id) return fail(c, 400, 'cannot_revoke_self');
   const now = new Date();
-  const row = await c.env.DB.prepare(
-    `UPDATE devices SET revoked_at = COALESCE(revoked_at, ?1), wipe_on_revoke = ?2
-     WHERE id = ?3 AND shop_id = ?4 RETURNING id`,
-  )
-    .bind(iso(now), body.wipe === true ? 1 : 0, id, dev.shop_id)
-    .first();
-  if (!row) return fail(c, 404, 'not_found');
+  const db = c.env.DB;
+  // Same transaction: the unused pair and recovery codes this device issued die with it, so a stolen phone cannot
+  // leave a way back in (recovery codes never expire). Re-issue recovery codes afterwards if the revoked phone
+  // minted the printed ones.
+  const [upd] = await db.batch([
+    db
+      .prepare(
+        `UPDATE devices SET revoked_at = COALESCE(revoked_at, ?1), wipe_on_revoke = ?2
+         WHERE id = ?3 AND shop_id = ?4 RETURNING id`,
+      )
+      .bind(iso(now), body.wipe === true ? 1 : 0, id, dev.shop_id),
+    db
+      .prepare(
+        `DELETE FROM pair_codes WHERE shop_id = ?1 AND issued_by = ?2 AND used_at IS NULL
+           AND EXISTS (SELECT 1 FROM devices WHERE id = ?2 AND shop_id = ?1)`,
+      )
+      .bind(dev.shop_id, id),
+  ]);
+  if (!upd?.results?.length) return fail(c, 404, 'not_found');
   return c.json<OkResponse>({ ok: true, ...envelope(c, now) });
 });
