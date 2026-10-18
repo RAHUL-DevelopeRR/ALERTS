@@ -402,6 +402,18 @@ describe('verifyGoogleIdToken (unit)', () => {
     expect(none).toEqual({ ok: false, error: 'aud' });
   });
 
+  it('a GOOGLE_HD address must carry the matching hd claim (Workspace account), other addresses never need one', async () => {
+    const ws = claims({ email: 'ravi@murugan-stores.in', hd: 'murugan-stores.in' });
+    expect((await verifyGoogleIdToken(await sign(k1, ws), [WEB_AUD], Date.now(), 'Murugan-Stores.in')).ok).toBe(true);
+    const consumer = claims({ email: 'ravi@murugan-stores.in' });
+    expect(await verifyGoogleIdToken(await sign(k1, consumer), [WEB_AUD], Date.now(), 'murugan-stores.in')).toEqual({ ok: false, error: 'hd' });
+    const other = claims({ email: 'ravi@murugan-stores.in', hd: 'other.in' });
+    expect(await verifyGoogleIdToken(await sign(k1, other), [WEB_AUD], Date.now(), 'murugan-stores.in')).toEqual({ ok: false, error: 'hd' });
+    // gmail users are unaffected by the var; without the var the claim is not checked
+    expect((await verifyGoogleIdToken(await sign(k1, claims()), [WEB_AUD], Date.now(), 'murugan-stores.in')).ok).toBe(true);
+    expect((await verifyGoogleIdToken(await sign(k1, consumer), [WEB_AUD])).ok).toBe(true);
+  });
+
   it('checks exp/iat against the injected clock with 5 minutes of skew', async () => {
     const t = await sign(k1, claims({ iat: 1_000_000, exp: 1_003_600 }));
     expect((await verifyGoogleIdToken(t, [WEB_AUD], 1_003_600_000 + 299_000)).ok).toBe(true);

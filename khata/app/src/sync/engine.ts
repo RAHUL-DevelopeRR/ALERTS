@@ -33,6 +33,7 @@ import {
   type EntryRow,
   type LoginExtras,
   type LoginResponse,
+  type MeResponse,
   type Role,
   type ShopInfo,
   type UserInfo,
@@ -828,6 +829,7 @@ export class Engine implements SyncEngine {
       client: this.web ? 'web' : 'android',
       expires_at: r.expires_at ?? null,
       signed_in_at: new Date(this.nowMs()).toISOString(),
+      ...(this.web && r.shared === true ? { shared: true } : {}),
     };
     await this.saveAccount(account);
     this.failures = 0;
@@ -842,16 +844,20 @@ export class Engine implements SyncEngine {
    * Web: a browser whose session cookie is still valid but whose local copy is gone (cleared site data) rebuilds the
    * pairing from GET /me. true = signed in (and synced); false = no session (401). Network trouble throws.
    */
-  async resumeWebSession(serverUrl: string): Promise<boolean> {
-    const stored = normalizeServerUrl(serverUrl);
-    let me;
+  async webSession(): Promise<MeResponse | null> {
     try {
-      me = await this.publicApi('').me();
+      const me = await this.publicApi('').me();
+      return me.user ? me : null;
     } catch (e) {
-      if (e instanceof SyncError && AUTH_ERRORS.has(e.code)) return false;
+      if (e instanceof SyncError && AUTH_ERRORS.has(e.code)) return null;
       throw e;
     }
-    if (!me.user) return false;
+  }
+
+  async resumeWebSession(serverUrl: string, known?: MeResponse): Promise<boolean> {
+    const stored = normalizeServerUrl(serverUrl);
+    const me = known ?? (await this.webSession());
+    if (!me || !me.user) return false;
     await this.repo.completePairing({
       server_url: stored,
       device_id: me.device.id,
@@ -861,7 +867,13 @@ export class Engine implements SyncEngine {
       sync_epoch: me.sync_epoch,
       code_block: EMPTY_BLOCK,
     });
-    await this.saveAccount({ user: me.user, client: 'web', expires_at: null, signed_in_at: new Date(this.nowMs()).toISOString() });
+    await this.saveAccount({
+      user: me.user,
+      client: 'web',
+      expires_at: me.device.expires_at ?? null,
+      signed_in_at: new Date(this.nowMs()).toISOString(),
+      ...(me.device.shared === true ? { shared: true } : {}),
+    });
     await this.refresh({ phase: 'idle', error: null });
     await this.syncNow();
     return true;
@@ -1034,13 +1046,15 @@ export class Engine implements SyncEngine {
     });
   }
 
+  /** Changing the UPI id asks for the owner's password / a recovery code (step-up); name and language do not. */
   updateShop(patch: { name?: string; upi_id?: string | null; lang?: 'ta' | 'en' }): Promise<ShopInfo> {
-    return this.owner(async (api) => (await api.updateShop(patch)).shop);
+    return this.stepped(async (api, proof) => (await api.updateShop(patch, proof)).shop);
   }
 
+  /** Erasure is irreversible: step-up. */
   eraseCustomer(customerId: string): Promise<void> {
-    return this.owner(async (api) => {
-      const r = await api.erase(customerId);
+    return this.stepped(async (api, proof) => {
+      const r = await api.erase(customerId, proof);
       await this.repo.applyErasure(customerId, r.customer);
       void this.refresh();
     });

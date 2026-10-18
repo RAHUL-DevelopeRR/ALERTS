@@ -437,13 +437,18 @@ export class ApiClient {
     );
   }
 
-  async updateShop(patch: ShopUpdateRequest): Promise<ShopUpdateResponse> {
-    return this.checked(await this.call<ShopUpdateResponse>('PUT', '/shop', { body: patch }), (v) => isObj(v.shop));
+  /** A UPI id change needs step-up (the server answers stepup_required without a proof); name/lang do not. */
+  async updateShop(patch: ShopUpdateRequest, proof?: StepUpProof | null): Promise<ShopUpdateResponse> {
+    return this.checked(
+      await this.call<ShopUpdateResponse>('PUT', '/shop', { body: patch, headers: proofHeaders(proof) }),
+      (v) => isObj(v.shop),
+    );
   }
 
-  async erase(customerId: string): Promise<EraseResponse> {
+  /** Erasure is irreversible, so it needs step-up. */
+  async erase(customerId: string, proof?: StepUpProof | null): Promise<EraseResponse> {
     return this.checked(
-      await this.call<EraseResponse>('POST', `/customers/${encodeURIComponent(customerId)}/erase`, { body: {} }),
+      await this.call<EraseResponse>('POST', `/customers/${encodeURIComponent(customerId)}/erase`, { body: {}, headers: proofHeaders(proof) }),
       (v) => isObj(v.customer),
     );
   }

@@ -56,7 +56,7 @@ const plugin = vi.hoisted(() => {
 
 vi.mock('@capgo/capacitor-speech-recognition', () => ({ SpeechRecognition: plugin.SpeechRecognition }));
 
-const { createNativeSpeech, mapStartError } = await import('../src/platform/speech-native');
+const { createNativeSpeech, mapStartError, PARTIAL_SETTLE_MS } = await import('../src/platform/speech-native');
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -463,11 +463,103 @@ describe('createNativeSpeech', () => {
       const s = createNativeSpeech();
       plugin.state.stopImpl = async () => stopped('userStop');
       const p = s.listen({ lang: 'ta-IN', maxMs: 3000 });
-      await vi.advanceTimersByTimeAsync(0);
-      plugin.emit('partialResults', { matches: ['ramu'] });
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(2900);
+      expect(plugin.state.stopCalls).toBe(0);
+      await vi.advanceTimersByTimeAsync(100);
       expect(plugin.state.stopCalls).toBe(1);
-      expect(await p).toEqual(['ramu']);
+      expect(await p).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends a DICTATION_MODE session PARTIAL_SETTLE_MS after the transcript last changed', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = createNativeSpeech();
+      plugin.state.stopImpl = async () => {
+        plugin.emit('partialResults', { matches: ['ராமு 100 குடுத்தாச்சு', 'ராமு நூறு குடுத்தாச்சு'] });
+        stopped('userStop');
+      };
+      const partials: string[] = [];
+      const p = s.listen({ lang: 'ta-IN', onPartial: (t) => partials.push(t), maxMs: 12_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      plugin.emit('partialResults', { matches: ['ராமு'] });
+      await vi.advanceTimersByTimeAsync(2000);
+      plugin.emit('partialResults', { matches: ['ராமு 100'] }); // change: timer re-armed
+      await vi.advanceTimersByTimeAsync(2000);
+      plugin.emit('partialResults', { matches: ['ராமு 100'] }); // same text: not re-armed
+      await vi.advanceTimersByTimeAsync(400);
+      expect(plugin.state.stopCalls).toBe(0);
+      await vi.advanceTimersByTimeAsync(PARTIAL_SETTLE_MS - 2400);
+      expect(plugin.state.stopCalls).toBe(1);
+      expect(await p).toEqual(['ராமு 100 குடுத்தாச்சு', 'ராமு நூறு குடுத்தாச்சு']);
+      expect(partials).toEqual(['ராமு', 'ராமு 100', 'ராமு 100', 'ராமு 100 குடுத்தாச்சு']);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(plugin.state.stopCalls).toBe(1); // nothing left armed after the session settled
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not arm the settle timer after a user stop(), and clears it when Google ends the session first', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = createNativeSpeech();
+      plugin.state.stopImpl = async () => undefined; // plugin reports nothing until we say so
+      let p = s.listen({ lang: 'ta-IN', maxMs: 12_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      plugin.emit('partialResults', { matches: ['sita'] });
+      await s.stop();
+      expect(plugin.state.stopCalls).toBe(1);
+      plugin.emit('partialResults', { matches: ['sita 50'] }); // final list after our stop
+      stopped('userStop');
+      expect(await p).toEqual(['sita 50']);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(plugin.state.stopCalls).toBe(1);
+
+      p = s.listen({ lang: 'ta-IN', maxMs: 12_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      plugin.emit('partialResults', { matches: ['kamala'] });
+      await vi.advanceTimersByTimeAsync(1000);
+      plugin.emit('partialResults', { matches: ['kamala 200'] });
+      stopped('results'); // Google ended the session by itself
+      expect(await p).toEqual(['kamala 200']);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(plugin.state.stopCalls).toBe(1); // settle timer was cleared with the session
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('marks the adapter idle after a bridge-level start() rejection, but not after "already running"', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = createNativeSpeech();
+      plugin.state.startImpl = async () => {
+        throw new Error('Plugin SpeechRecognition does not respond to method call "start"');
+      };
+      await expect(s.listen({ lang: 'ta-IN' })).rejects.toThrow('SPEECH_ERROR:START_FAILED');
+      plugin.state.startImpl = null;
+      let p = s.listen({ lang: 'ta-IN' });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(plugin.state.startCalls).toHaveLength(2);
+      stopped('results');
+      expect(await p).toEqual([]);
+
+      plugin.state.startImpl = async () => {
+        throw new Error('Speech recognition is already running.');
+      };
+      await expect(s.listen({ lang: 'ta-IN' })).rejects.toThrow('SPEECH_ERROR:BUSY');
+      plugin.state.startImpl = null;
+      p = s.listen({ lang: 'ta-IN' });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(plugin.state.startCalls).toHaveLength(3); // still waiting for the live native session
+      plugin.emit('listeningState', { state: 'stopped', sessionId: 42, reason: 'userStop', status: 'stopped' });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(plugin.state.startCalls).toHaveLength(4);
+      stopped('results');
+      expect(await p).toEqual([]);
     } finally {
       vi.useRealTimers();
     }

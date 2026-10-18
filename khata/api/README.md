@@ -130,8 +130,8 @@ Notes:
 | `POST /devices/code-block` | any device | next 50 customer codes (raised to `max_local_code` first, at most 1,000,000) |
 | `GET /devices` | owner | |
 | `POST /devices/:id/revoke` | owner, step-up, not web | `{wipe}` makes the revoked phone's next request answer `401 {error:'revoked', wipe:true}`; the unused pair and recovery codes it issued are deleted in the same transaction (re-issue recovery codes if it minted the printed ones) |
-| `PUT /shop` | owner | name 1-80, UPI id or null, lang ta/en |
-| `POST /customers/:id/erase` | owner | DPDP erasure, terminal, one change-log row |
+| `PUT /shop` | owner; step-up when `upi_id` changes | name 1-80, UPI id or null, lang ta/en; a UPI change is audited (`shop.update`) |
+| `POST /customers/:id/erase` | owner, step-up | DPDP erasure, terminal, one change-log row, audited (`customer.erase`) |
 | `POST /sync/push` | any device | at most 20 rows, see protocol.ts |
 | `GET /sync/pull?since&limit` | any device | at most 500 changes per page, own rows skipped except on `since=0` |
 | `GET /export` | owner | streamed `ExportFile` JSON attachment |
@@ -143,7 +143,7 @@ Notes:
 | `POST /auth/logout` | any session | revokes the calling device, clears the cookie |
 | `GET /auth/events` | owner (web allowed) | the newest 200 audit rows |
 | `GET /users` | owner (web allowed) | |
-| `POST /users`, `PUT /users/:id` | owner, step-up, not web | user management; `link_me` attaches the calling (paired) owner phone to the new owner user; `PUT` needs step-up only for `role` / `google_email` / `disabled` |
+| `POST /users`, `PUT /users/:id` | owner, step-up, not web | user management; `link_me` attaches the calling (paired) owner phone to the new owner user; `PUT` needs step-up only for `role` / `google_email` / `disabled`; demoting an owner ends their web sessions |
 | `PUT /users/:id/password` | self (any session, with `current_client_key`) / owner for others (step-up, not web) | revokes that user's (other) devices and clears their login locks |
 
 **Pair throttle.** Two layers. First, the `PAIR_LIMITER` Workers Rate Limiting binding allows 10 `/pair` requests
@@ -238,9 +238,11 @@ Keyed so that an attacker cannot lock the owner out (the owner's login id may be
    `CF-Connecting-IP`, else `unknown`. Each attempt is recorded as a failure atomically before the check (so a burst
    cannot slip past); from the 5th consecutive failure the pair is locked for 30 s, doubling to at most 15 min
    (`429 {error:'locked', retry_after}` + `Retry-After`). Never permanent; a successful login or an owner password
-   reset clears it. An attacker from one network locks only (owner, that network).
+   reset clears it. An attacker from one network locks only (owner, that network). A locked attempt is answered
+   before the verifier and before the shop-wide budget below, so it costs the shop nothing.
 3. **Known-device exemption.** Every successful login returns `known_device` =
-   `<device id>.<HMAC(PEPPER, 'kk-known-v1:' + device id)>` (the web also gets it as the cookie `kk_known`, one year).
+   `<device id>.<HMAC(PEPPER, 'kk-known-v1:' + device id)>` (the web also gets it as the cookie `kk_known`, one year;
+   **not** on a `shared_computer` login, which leaves no persistent cookie at all).
    A later login that carries it (header `X-KK-Known` or the cookie) for the **same user** is exempt from the
    per-source lock and from the shop-wide throttle; it has its own 5-failure backoff keyed on
    (username, `known:<device id>`), so a stolen phone guessing passwords is still throttled. A value for another user
@@ -248,8 +250,10 @@ Keyed so that an attacker cannot lock the owner out (the owner's login id may be
    when an attacker is hammering the owner's username from the owner's own carrier's CGNAT range.
 4. Shop-wide: wrong password logins from **unknown sources** per UTC day in `auth_failures`, like `pair_failures`.
    After `AUTH_THROTTLE_AFTER` (default 100) only one such attempt per 30 s is allowed (`429 {error:'throttled'}`);
-   a successful login gives its attempt back; known devices are never charged. Malformed requests are rejected
-   before any counter moves.
+   a successful login gives its attempt back; known devices are never charged, and neither are attempts the
+   per-source lock refused (they never reach the verifier). Malformed requests are rejected before any counter
+   moves. So one network can cost the shop at most 5 of the day's 100 per lock period, and a new device elsewhere
+   (the owner's new laptop) still gets in.
 5. Step-up attempts (`X-KK-Stepup`) use the same backoff, keyed on (username, `stepup:<device id>`).
 
 ### Sessions, cookies, CSRF
@@ -259,13 +263,16 @@ Keyed so that an attacker cannot lock the owner out (the owner's login id may be
   syncs first and asks `POST /devices/code-block` when it needs codes, so a browser does not burn 50 codes per login).
   The server sets `kk_session=<token>; HttpOnly; Secure; SameSite=Strict; Path=/v1; Max-Age=2592000` and the device
   row expires after 30 days (`devices.expires_at`, enforced server side). With `shared_computer: true` in the login
-  body the row expires after **12 h** and the cookie has **no Max-Age** (it dies with the browser). Every
+  body the row expires after **12 h**, the cookie has **no Max-Age** (it dies with the browser) and no `kk_known`
+  cookie is set (nothing persistent is left on that PC). Every
   cookie-authenticated request must carry `X-KK-Client: web` (any method), else `403 {error:'csrf'}`.
   SameSite=Strict is the first layer; a cross-site page cannot add the header without a CORS preflight this Worker
   never grants with credentials. The web app is same-origin, so no CORS is involved.
 - Transport binding: a web session token is never accepted as a Bearer token and an app token never as a cookie.
 - **Web = owner only** in this build: a staff user's web login (password or Google) answers `403 web_owner_only`
-  after the credentials were checked (the client shows "web login is for the owner; use the phone app").
+  after the credentials were checked (the client shows "web login is for the owner; use the phone app"). Demoting
+  an owner to staff (`PUT /users/:id {role:'staff'}`) revokes that user's live web sessions in the same transaction
+  (their phone sessions continue as staff); the `user.update` audit row says `web_sessions_ended: true`.
 - **What a web session may not do**, whatever its role: `POST /users`, `PUT /users/:id`, resetting another user's
   password, minting pair or recovery codes, revoking devices: all answer `403 web_forbidden`. It may read
   (`GET /users`, `GET /devices`, `GET /auth/events`), sync, and change its own password with the current key.
@@ -279,8 +286,10 @@ Keyed so that an attacker cannot lock the owner out (the owner's login id may be
 
 Creating or changing logins and minting or revoking access are **owner-power** actions: `POST /users`,
 `PUT /users/:id` (when `role`, `google_email` or `disabled` is present), `PUT /users/:id/password` for another user,
-`POST /devices/pair-code`, `POST /devices/recovery-codes`, `POST /devices/:id/revoke`. Being an owner device is not
-enough; the caller must prove, right now, that it is the owner and not someone holding an unlocked phone:
+`POST /devices/pair-code`, `POST /devices/recovery-codes`, `POST /devices/:id/revoke`. So are the two money-relevant
+shop actions, from any owner session including the web: `PUT /shop` when it changes `upi_id` (where customers are
+told to pay) and `POST /customers/:id/erase` (irreversible). Being an owner device is not enough; the caller must
+prove, right now, that it is the owner and not someone holding an unlocked phone (or a browser left open):
 
 - `X-KK-Stepup: <client_key>`: the caller's user's **current** password, derived exactly as for login (prelogin +
   PBKDF2) and verified the same way (constant time, 5-failure backoff). The app asks for the password again.
@@ -306,8 +315,9 @@ phone at 02:00, and then revoke that phone and disable that login.
 The Worker verifies Google ID tokens itself (RS256 with WebCrypto against
 `https://www.googleapis.com/oauth2/v3/certs`, cached in memory and in the Cache API for the response's `max-age`, one
 forced refetch per minute at most when an unknown `kid` appears), checks `iss` (`accounts.google.com` or
-`https://accounts.google.com`), `aud`, `exp`/`iat` with 5 min skew, `email_verified` and the **`nonce`** claim.
-Hardening:
+`https://accounts.google.com`), `aud`, `exp`/`iat` with 5 min skew, `email_verified`, the **`nonce`** claim and,
+for an address at the `GOOGLE_HD` domain, the **`hd`** claim (Google sets it for Workspace accounts; a consumer
+account carrying such an address answers `403 {error:'invalid_token', message:'hd'}`). Hardening:
 
 - **Audience by client kind**: `client:'web'` accepts only `GOOGLE_CLIENT_IDS`, `client:'android'` only
   `GOOGLE_ANDROID_CLIENT_IDS` (empty list = `404`). A web token can never mint an Android bearer token.
@@ -354,12 +364,26 @@ Honest limits of this design. Someone holding the owner's **unlocked** phone (no
   elsewhere naming it as `previous_device_id` (a legacy paired phone needs its token, `previous_device_token`).
 
 They can **not**, without the owner's password or a printed recovery code: create or change logins, change a Google
-address, reset anyone's password, mint pair or recovery codes, or revoke other phones (`403 stepup_required`), nor
-read the password (only the stretched `client_key` of a *typed* password ever exists, in memory). If the thief also
-has the password, or a recovery code from the cash box, they are the owner as far as the server can tell; the
+address, reset anyone's password, mint pair or recovery codes, revoke other phones, change the shop's UPI id or
+erase a customer (`403 stepup_required`), nor read the password (only the stretched `client_key` of a *typed*
+password ever exists, in memory). If the thief also has the password, or a recovery code from the cash box, they
+are the owner as far as the server can tell; the
 `auth_events` list on the other owner devices is then the way to notice (`user.create`, `recovery_codes.mint`, a
 `login.ok` from a new device) and undo it (revoke, disable, re-issue recovery codes). The bootstrap exception above
 applies only to a shop that has never created a login.
+
+**The password is the credential (pass-the-hash).** The `client_key` sent at login is the stretched password and the
+same value is the step-up proof, so whatever captures it on the web login page (an XSS, a malicious browser
+extension, a tampered build) holds the owner's password as far as the server can tell: it can log in with
+`client:'android'` for a bearer session that never expires, step up with the captured key, mint codes, revoke the
+owner's phones (`POST /devices/:id/revoke`, or `previous_device_id` at login for a row of the same user) and change
+the UPI id. The web restrictions (`web_forbidden`, owner-only, 30-day expiry) do not apply to that lane. Mitigations
+in this build: the strict CSP on the web app (`_headers`: no inline script, no eval, `frame-ancestors 'none'`), the
+single-use Google nonce, and the audit trail: every such login is a `login.ok` row with `client: 'android'` and an
+unknown `source` (a known device's source reads `known:<device id>`), so the owner's other devices can see it and
+revoke it. Not in this build: requiring an existing owner device's approval (or a recovery code) for a NEW owner
+android login; that needs a client flow on the login screen and is tracked as a follow-up. Until then: keep the CSP
+strict, and treat "someone could run script on the login page" as "someone has the password".
 
 ### Free-plan CPU (measured)
 

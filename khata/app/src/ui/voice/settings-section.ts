@@ -15,6 +15,7 @@ import { toast } from '../components/overlay';
 import { errorText } from '../errors';
 import * as router from '../router';
 import { micIcon } from './icons';
+import { voicePreflight } from './listen';
 import { planIntent, speechErrorKey, toVoiceCustomers } from './plan';
 import { loadVoicePrefs, loadVoiceStats, resetVoiceStats, saveVoicePrefs, type VoicePrefs, type VoiceStats } from './prefs';
 
@@ -123,8 +124,8 @@ function tryBlock(p: VoicePrefs): HTMLElement {
       const speech = app.platform.speech;
       micBtn.disabled = true;
       try {
-        if (!(await speech.available())) throw new Error('SPEECH_UNAVAILABLE');
-        if (!(await speech.ensurePermission())) throw new Error('SPEECH_PERMISSION');
+        // Same gate as the mic buttons: recogniser, internet, the one-time Google notice, mic permission.
+        if (!(await voicePreflight())) return;
         input.value = '';
         input.placeholder = t('voice.listening');
         const alts = await speech.listen({ lang: p.lang, onPartial: (text) => { input.value = text; }, maxAlternatives: 5, maxMs: 12_000 });

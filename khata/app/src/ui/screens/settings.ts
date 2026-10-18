@@ -101,18 +101,19 @@ function langSection(s: Settings): HTMLElement {
   );
 }
 
+async function setPin(): Promise<void> {
+  const pin = await askNewPin();
+  if (!pin) return;
+  try {
+    await app.repo.setPin(pin);
+    toast(t('pin.set'));
+  } catch (e) {
+    toast(errorText(e), { error: true });
+  }
+  void router.rerender();
+}
+
 function securitySection(s: Settings): HTMLElement {
-  const setPin = async (): Promise<void> => {
-    const pin = await askNewPin();
-    if (!pin) return;
-    try {
-      await app.repo.setPin(pin);
-      toast(t('pin.set'));
-    } catch (e) {
-      toast(errorText(e), { error: true });
-    }
-    void router.rerender();
-  };
   const removePin = async (): Promise<void> => {
     if (!(await confirmDialog({ message: t('set.removePinConfirm'), ok: t('set.removePin'), danger: true }))) return;
     await app.repo.setPin(null);
@@ -333,7 +334,7 @@ function accountBlock(s: Settings): HTMLElement {
   }, 'btn btn-block', { 'data-testid': 'change-pw' });
   if (!acc) {
     const createMine = s.role === 'owner' && !web
-      ? button(t('auth.createMine'), () => void createLoginForMe(), 'btn btn-primary btn-block', { 'data-testid': 'create-mine' })
+      ? button(t('auth.createMine'), () => void createLoginForMe(s), 'btn btn-primary btn-block', { 'data-testid': 'create-mine' })
       : null;
     return block(
       h('p', { class: 'input-help', attrs: { 'data-testid': 'account-line' }, text: t('auth.noLogin') }),
@@ -344,14 +345,23 @@ function accountBlock(s: Settings): HTMLElement {
   const ends = sessionEndsText(acc.expires_at);
   return block(
     h('p', { style: { fontWeight: '700' }, attrs: { 'data-testid': 'account-line' }, text: t('auth.signedInAs', { name: acc.user.display_name, user: acc.user.username }) }),
-    h('p', { class: 'input-help', style: { marginBottom: '10px' }, text: `${roleText(acc.user.role)}${ends ? ` · ${ends}` : ''}` }),
+    h('p', { class: 'input-help', style: { marginBottom: '10px' }, text: `${roleText(acc.user.role)}${ends ? ` · ${ends}` : ''}${acc.shared ? ` · ${t('web.sharedMode')}` : ''}` }),
     changePw,
     signOut,
   );
 }
 
-/** A paired owner phone without a login creates its own (link_me): user id + password. */
-async function createLoginForMe(): Promise<void> {
+/**
+ * A paired owner phone without a login creates its own (link_me): user id + password. The server cannot ask for a
+ * step-up while the shop has no users (bootstrap), so this phone asks for an app PIN first: without one, whoever
+ * holds an unlocked phone could turn it into a web-capable owner login (a guard on this phone only).
+ */
+async function createLoginForMe(s: Settings): Promise<void> {
+  if (!s.pin_set) {
+    await alertDialog(t('auth.createMine'), t('auth.createMinePin'));
+    await setPin();
+    return;
+  }
   const user = usernameField('mine-user');
   const name = h('input', { class: 'input', attrs: { type: 'text', maxlength: 80, autocomplete: 'name', 'data-testid': 'mine-name' } });
   const a = passwordField({ label: t('auth.newPassword'), testid: 'mine-pw', autocomplete: 'new-password' });
@@ -521,14 +531,40 @@ function eventLabel(e: AuthEvent): string {
   return hasKey(k) ? t(k) : e.action;
 }
 
-function eventDetail(e: AuthEvent): string {
+/** Names for the ids an audit row carries (user ids -> user id shown to the owner, device ids -> device name). */
+interface EventNames {
+  users: Map<string, string>;
+  devices: Map<string, string>;
+}
+
+/** Server codes in a row's detail are shown as the owner reads them elsewhere (serr.*), never raw. */
+function codeText(code: string): string {
+  const k = `serr.${code}`;
+  return hasKey(k) ? t(k) : code;
+}
+
+function clientText(client: string): string {
+  return client === 'web' ? t('auth.clientWeb') : client === 'android' ? t('auth.clientPhone') : client;
+}
+
+export function eventDetail(e: AuthEvent, names: EventNames = { users: new Map(), devices: new Map() }): string {
   const d = e.detail ?? {};
   const parts: string[] = [];
-  if (typeof d.username === 'string') parts.push(d.username);
-  if (typeof d.client === 'string') parts.push(d.client);
-  if (typeof d.why === 'string') parts.push(d.why);
+  const who = typeof d.username === 'string' ? d.username : e.actor_user_id ? names.users.get(e.actor_user_id) ?? null : null;
+  if (who) parts.push(who);
+  if (typeof d.client === 'string') parts.push(clientText(d.client));
+  if (typeof d.why === 'string') parts.push(codeText(d.why));
   if (typeof d.how === 'string') parts.push(d.how);
-  if (typeof d.role === 'string' && e.action === 'user.create') parts.push(d.role);
+  if (typeof d.role === 'string' && e.action === 'user.create') parts.push(roleText(d.role === 'owner' ? 'owner' : 'staff'));
+  if (e.target_user_id && e.target_user_id !== e.actor_user_id) {
+    const target = names.users.get(e.target_user_id);
+    if (target && !parts.includes(target)) parts.push(target);
+  }
+  // Which device signed out / was removed / signed in: the row names it when the server still lists it.
+  if (e.target_device_id) {
+    const dev = names.devices.get(e.target_device_id);
+    if (dev) parts.push(dev);
+  }
   return parts.join(' · ');
 }
 
@@ -537,7 +573,15 @@ function activitySection(): HTMLElement {
   const box = h('div', { attrs: { 'data-testid': 'activity-list' } }, h('p', { class: 'input-help', text: t('common.working') }));
   void (async () => {
     try {
-      const events = await app.sync.authEvents();
+      const [events, users, devices] = await Promise.all([
+        app.sync.authEvents(),
+        app.sync.listUsers().catch(() => [] as UserInfo[]),
+        app.sync.listDevices().catch(() => []),
+      ]);
+      const names: EventNames = {
+        users: new Map(users.map((u) => [u.id, u.username])),
+        devices: new Map(devices.map((d) => [d.id, d.name])),
+      };
       clear(box);
       if (!events.length) box.appendChild(h('p', { class: 'input-help', text: t('auth.activityNone') }));
       for (const e of events.slice(0, 50)) {
@@ -545,7 +589,7 @@ function activitySection(): HTMLElement {
           h(
             'div',
             { class: 'set-row', style: { paddingLeft: '0', paddingRight: '0' } },
-            h('span', 'grow', eventLabel(e), h('span', { class: 'sub', text: [when(e.at), eventDetail(e)].filter(Boolean).join(' · ') })),
+            h('span', 'grow', eventLabel(e), h('span', { class: 'sub', text: [when(e.at), eventDetail(e, names)].filter(Boolean).join(' · ') })),
           ),
         );
       }

@@ -1,7 +1,7 @@
 /**
  * Security review of the accounts client (src/sync, src/ui/web, src/ui/screens/login.ts) against plan-findings 12-20.
- * Static checks (XSS sinks, CSP, storage names, built bundle) plus one engine trace that documents an open gap in the
- * web boot path (shared-computer sessions survive a reload into the persisted database; see R-WEB-3).
+ * Static checks (XSS sinks, CSP, storage names, built bundle) plus engine traces of the shared-computer reload path
+ * (R-WEB-3: a shared session is recognisable from GET /me and is never rebuilt into the persisted database).
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -105,32 +105,58 @@ describe('R-WEB-3 [F17] shared-computer mode: what survives a reload', () => {
   });
 
   /**
-   * Documents the gap, at the engine level: after a shared-computer login the session cookie is alive for 12 h and
-   * GET /me says nothing about `shared_computer`, so the resume path (src/ui/web/boot.ts: no local copy -> GET /me ->
-   * completePairing + full pull) rebuilds the ledger into whatever repo boot.ts opened, which is the PERSISTED one
-   * (openWebRepo(false)). A reload of the tab on a shared computer therefore leaves the whole ledger in IndexedDB.
-   * The engine itself cannot tell; the fix belongs in boot.ts (+ a shared/expires flag from /me).
+   * Fixed: GET /me now reports device.shared / expires_at (api/src/lib/rows.ts toDeviceInfo, derived from the 12 h
+   * expiry) and LoginResponse.shared; the engine records `shared` on the account and exposes webSession() so that
+   * src/ui/web/boot.ts can ask the server BEFORE it opens any database: a shared session is rebuilt in the in-memory
+   * database again, the persisted one is opened only for a session the server says is not shared. The boot order
+   * itself is checked statically below and end to end by e2e/web-login.mjs (shared sign-in -> reload -> no IndexedDB).
    */
-  it('a shared-computer session resumes from the cookie into a fresh (persisted-style) repo with the full ledger', async () => {
+  it('a shared-computer session is recognisable on reload: webSession() says shared, the resumed account says shared', async () => {
     const first = await makePhone(w, { deriveKey: fakeDerive, web: true });
-    await first.engine.login('http://localhost:8787', 'ravi', 'owner-pass-1', 'Shared PC', { shared: true });
+    const acc = await first.engine.login('http://localhost:8787', 'ravi', 'owner-pass-1', 'Shared PC', { shared: true });
+    expect(acc.shared).toBe(true);
     await first.engine.requestCodes();
     const c = await first.repo.createCustomer({ name: 'Kamala' });
     await first.repo.addEntry({ customer_id: c.id, kind: 'GIVE', amount_paise: 10_000 });
     await first.engine.syncNow();
     expect(w.server.webCookie).toMatch(/^tok-/); // the cookie the browser still holds after a reload (12 h, no Max-Age)
+    expect(w.server.knownCookie).toBeNull(); // and no one-year kk_known cookie on the shared PC (R2d)
     const login = w.server.requests.find((r) => r.path === '/auth/login')!.body as Record<string, unknown>;
     expect(login.shared_computer).toBe(true);
 
-    // reload: boot.ts opens the persisted repo (the memory repo is gone with the page) and calls resumeWebSession
+    // reload: boot.ts asks the server first, with no database chosen yet
     const reloaded = await makePhone(w, { deriveKey: fakeDerive, web: true });
-    expect(await reloaded.engine.resumeWebSession('http://localhost:8787')).toBe(true);
+    const me = await reloaded.engine.webSession();
+    expect(me?.device.shared).toBe(true);
+    expect(me?.device.expires_at).toBeTruthy();
+    expect(await reloaded.engine.resumeWebSession('http://localhost:8787', me!)).toBe(true);
     expect((await reloaded.repo.getSettings()).paired).toBe(true);
     expect(await reloaded.repo.getCustomer(c.id)).not.toBeNull();
-    expect(reloaded.engine.getAccount()?.client).toBe('web');
-    // nothing in the resumed account says "shared": the UI cannot choose the in-memory database
-    expect(JSON.stringify(reloaded.engine.getAccount())).not.toMatch(/shared/);
-    const me = w.server.requests.filter((r) => r.path === '/me').at(-1);
-    expect(me).toBeDefined();
+    expect(reloaded.engine.getAccount()).toMatchObject({ client: 'web', shared: true, expires_at: me!.device.expires_at });
+  });
+
+  it('a normal (not shared) session resumes with shared absent, and no session at all answers null', async () => {
+    const first = await makePhone(w, { deriveKey: fakeDerive, web: true });
+    await first.engine.login('http://localhost:8787', 'ravi', 'owner-pass-1', 'Own laptop');
+    const reloaded = await makePhone(w, { deriveKey: fakeDerive, web: true });
+    const me = await reloaded.engine.webSession();
+    expect(me?.device.shared).toBe(false);
+    expect(await reloaded.engine.resumeWebSession('http://localhost:8787', me!)).toBe(true);
+    expect(reloaded.engine.getAccount()?.shared).toBeUndefined();
+    await reloaded.engine.logout({ removeData: true });
+    expect(await (await makePhone(w, { deriveKey: fakeDerive, web: true })).engine.webSession()).toBeNull();
+  });
+
+  it('boot.ts opens the persisted database only for a known non-shared session and treats an unknown answer as shared', () => {
+    const boot = read(join(APP, 'src', 'ui', 'web', 'boot.ts'));
+    // the persisted database is opened in exactly two places: an existing copy, and after the server said "not shared"
+    expect(boot.match(/openWebRepo\(false\)/g)?.length).toBe(2);
+    expect(boot).toMatch(/if \(await hasWebDatabase\(\)\) \{[\s\S]*?openWebRepo\(false\)/);
+    expect(boot).toMatch(/if \(!isSharedSession\(me\)\) await goPersisted\(\);/);
+    expect(boot).toMatch(/return me\.device\.shared !== false;/); // unknown -> in memory
+    // the login gate switches to the persisted database only when the box is not ticked
+    expect(boot).toMatch(/if \(shared && mode !== 'memory'\) await goMemory\(\);\s*if \(!shared && mode !== 'persisted'\) await goPersisted\(\);/);
+    // the resume path never runs before the session check
+    expect(boot.indexOf('app.sync.webSession()')).toBeLessThan(boot.indexOf('resumeWebSession(origin, me)'));
   });
 });

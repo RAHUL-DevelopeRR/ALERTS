@@ -2,6 +2,8 @@
  * "Heard: ..." banner on the keypad for a voice prefill: the words the amount came from in large type beside the
  * rupees ("ஐநூறு → ₹500", finding 8), the balance before → after (updates while the amount or direction changes),
  * other amounts the recogniser offered as chips, and a clear "Debit or Credit?" ask when the direction was unclear.
+ * When a chip or the keypad changes the amount, the heard figure is struck through and the chosen one shown beside
+ * it, so the banner never disagrees with the keypad (the keypad value is what Save uses).
  */
 import { formatINR } from '../../core/ledger';
 import { t } from '../../i18n';
@@ -14,7 +16,7 @@ type Kind = 'GIVE' | 'RECEIVE';
 
 export interface VoiceBanner {
   el: HTMLElement;
-  /** Re-render the balance line and chip highlight for the keypad's current state. */
+  /** Re-render the amount line, the balance line and the chip highlight for the keypad's current state. */
   update(paise: number | null, kind: Kind | null): void;
 }
 
@@ -23,13 +25,29 @@ export function voiceBanner(v: VoicePrefill, o: { balance: number; onAmount: (pa
   const top = h('div', 'voice-banner-top', micIcon('ic'), heard, v.queue ? h('span', { class: 'voice-queue', attrs: { 'data-testid': 'voice-queue' }, text: t('voice.queue', { i: v.queue.index, n: v.queue.total }) }) : null);
 
   const src = h('div', { class: 'voice-amount-src', attrs: { 'data-testid': 'voice-amount-src' } });
-  if (v.amount_paise !== null) {
+  /** The spoken words when they differ from the figure ("ஐநூறு", "five hundred"), else null. */
+  const spoken = ((): string | null => {
+    if (v.amount_paise === null || !v.amount_text) return null;
+    const plain = v.amount_text.replace(/[,\s]/g, '');
+    return plain === String(v.amount_paise / 100) || plain === formatINR(v.amount_paise).replace(/[₹,]/g, '') ? null : v.amount_text;
+  })();
+  const paintSrc = (current: number | null): void => {
+    clear(src);
+    if (v.amount_paise === null) {
+      // Nothing heard: the typed figure takes the line once there is one.
+      if (current === null) src.textContent = t('voice.noAmount');
+      else src.append(h('span', { class: 'num', text: formatINR(current) }));
+      return;
+    }
     const rupees = formatINR(v.amount_paise);
-    const plain = v.amount_text ? v.amount_text.replace(/[,\s]/g, '') : '';
-    if (v.amount_text && plain !== String(v.amount_paise / 100) && plain !== rupees.replace(/[₹,]/g, '')) {
-      src.append(h('span', { text: v.amount_text }), h('span', { class: 'arrow', text: '→' }), h('span', { class: 'num', text: rupees }));
-    } else src.append(h('span', { class: 'num', text: rupees }));
-  } else src.textContent = t('voice.noAmount');
+    if (current === v.amount_paise) {
+      if (spoken) src.append(h('span', { text: spoken }), h('span', { class: 'arrow', text: '→' }));
+      src.append(h('span', { class: 'num', text: rupees }));
+      return;
+    }
+    // Changed on the keypad or by a chip: heard figure struck through, the chosen one in its place.
+    src.append(h('s', { class: 'was num', attrs: { 'data-testid': 'voice-amount-was' }, text: spoken ? `${spoken} (${rupees})` : rupees }), h('span', { class: 'arrow', text: '→' }), h('span', { class: 'num', text: current === null ? '—' : formatINR(current) }));
+  };
 
   const bal = h('div', { class: 'voice-bal', attrs: { 'data-testid': 'voice-balance-line' } });
   const ask = h('div', { class: 'voice-ask hidden', attrs: { 'data-testid': 'voice-ask' }, text: t('voice.chooseKindHelp') });
@@ -53,6 +71,7 @@ export function voiceBanner(v: VoicePrefill, o: { balance: number; onAmount: (pa
   return {
     el,
     update(paise, kind) {
+      paintSrc(paise);
       const before = signedBal(o.balance);
       clear(bal);
       if (paise !== null && kind) {

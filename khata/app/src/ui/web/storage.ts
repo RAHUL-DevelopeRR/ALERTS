@@ -3,17 +3,39 @@
  * under the name below) and the localStorage entries of the web platform (private files such as account.json and
  * daily snapshots, PIN counters). Call after the database has been closed. Never throws.
  */
+import type { Lang } from '../../../../shared/protocol';
 import { PREVIEW_DB_KEY } from '../../data/index';
 
 /** IndexedDB database name used by src/db/sqljs.ts (kept in sync by test/web.storage.test.ts). */
 export const SQLJS_IDB_NAME = 'kadan-kanakku-sqljs';
+/** The login page's language choice: the one per-browser convenience that survives a wipe (no ledger data). */
+const LANG_KEY = 'kk-web-lang';
+
+export function rememberLang(lang: Lang): void {
+  try {
+    window.localStorage.setItem(LANG_KEY, lang);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+export function rememberedLang(): Lang | null {
+  try {
+    const v = window.localStorage.getItem(LANG_KEY);
+    return v === 'ta' || v === 'en' ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function wipeWebStorage(): Promise<void> {
+  const lang = rememberedLang();
   try {
     window.localStorage.clear();
   } catch {
     /* storage unavailable */
   }
+  if (lang) rememberLang(lang);
   try {
     window.sessionStorage.clear();
   } catch {

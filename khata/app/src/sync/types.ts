@@ -2,7 +2,7 @@
  * Sync engine contract (src/sync/engine.ts implements it; get it with `syncEngine()` from src/sync/index.ts).
  * The engine is optional: an unpaired phone works fully offline and never calls the network.
  */
-import type { AuthEvent, ClientKind, ConfigResponse, Role, DeviceInfo, ShopInfo, UserInfo, UserSummary } from '../../../shared/protocol';
+import type { AuthEvent, ClientKind, ConfigResponse, Role, DeviceInfo, MeResponse, ShopInfo, UserInfo, UserSummary } from '../../../shared/protocol';
 
 export type SyncPhase = 'unpaired' | 'idle' | 'syncing' | 'offline' | 'error' | 'revoked';
 
@@ -65,8 +65,14 @@ export interface SyncEngine {
   /** prelogin -> PBKDF2 -> /auth/login -> completePairing -> first sync. Throws SyncError (invalid_login, locked, ...). */
   login(serverUrl: string, username: string, password: string, deviceName: string, opts?: { shared?: boolean; onProgress?: (p: LoginProgress) => void }): Promise<AccountInfo>;
   googleLogin(serverUrl: string, idToken: string, deviceName: string, opts?: { shared?: boolean }): Promise<AccountInfo>;
-  /** Web only: rebuild the local pairing from a still-valid cookie session (GET /me). */
-  resumeWebSession(serverUrl: string): Promise<boolean>;
+  /**
+   * Web only: GET /me with the cookie the browser still holds. null = no live session (401/403); network trouble
+   * throws. boot.ts calls it BEFORE choosing a database so a shared-computer session (device.shared) is rebuilt in
+   * memory and never written to this computer.
+   */
+  webSession(): Promise<MeResponse | null>;
+  /** Web only: rebuild the local pairing from a still-valid cookie session (`me` from webSession(), else GET /me). */
+  resumeWebSession(serverUrl: string, me?: MeResponse): Promise<boolean>;
   logout(opts: { removeData: boolean; force?: boolean }): Promise<void>;
   /** Web only: fetch a customer-code block when none is left. */
   requestCodes(): Promise<void>;
@@ -85,6 +91,8 @@ export interface AccountInfo {
   /** When the web session ends (null for Android / when unknown). */
   expires_at: string | null;
   signed_in_at: string;
+  /** Web only: the session was opened with "shared computer" (in-memory database, nothing persisted). */
+  shared?: boolean;
 }
 
 export type LoginProgress = 'prelogin' | 'deriving' | 'login';

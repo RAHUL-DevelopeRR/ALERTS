@@ -11,6 +11,7 @@ import { errorText } from '../errors';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { reminderText } from '../statement-text';
+import { isWebApp } from '../web/flag';
 import { micHeaderButton } from '../voice/mic-button';
 import { loadVoicePrefs } from '../voice/prefs';
 
@@ -110,6 +111,17 @@ export const customerScreen: Screen = async (root, route) => {
   }
 };
 
+/**
+ * A row the server has not confirmed yet. On the web (the "online copy") a push follows every save within seconds,
+ * so while syncing is healthy the row only says "Saving…"; the yellow "Not on server" is kept for a row still
+ * pending after the push failed (offline / error) and for phones, where pending is the normal offline state.
+ */
+function pendingBadge(): HTMLElement {
+  const phase = app.sync.status().phase;
+  if (isWebApp() && (phase === 'idle' || phase === 'syncing')) return h('span', { class: 'badge badge-dev', attrs: { 'data-testid': 'badge-saving' }, text: t('web.saving') });
+  return h('span', { class: 'badge badge-warn', text: t('badge.pending') });
+}
+
 function entryRow(r: EntryView, byId: Map<string, EntryView>, paired: boolean, onTap: () => void): HTMLElement {
   const meta: string[] = [day(r.biz_date)];
   let kindText = kindLabel(r.kind);
@@ -142,7 +154,7 @@ function entryRow(r: EntryView, byId: Map<string, EntryView>, paired: boolean, o
         h('span', { text: meta.join(' · ') }),
         r.device_name ? h('span', { class: 'badge badge-dev', text: r.device_name }) : null,
         r.sync_state === 'rejected' ? h('span', { class: 'badge badge-bad', text: t('badge.rejected') }) : null,
-        paired && r.sync_state === 'pending' ? h('span', { class: 'badge badge-warn', text: t('badge.pending') }) : null,
+        paired && r.sync_state === 'pending' ? pendingBadge() : null,
       ),
     ),
     h(

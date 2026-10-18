@@ -411,7 +411,7 @@ export const en = {
   'set.discard': 'Discard',
   'set.resend': 'Resend',
   'set.privacy': 'Privacy',
-  'set.privacyBody': 'This app stores customer names, mobile numbers, notes and amounts on this phone. If you connect a shop server, a copy is kept on that server and on your other phones. Nothing is shared with anyone else, and the app sends no messages by itself. In this version the file on the phone is not encrypted; the PIN only stops casual opening. A customer can ask you to erase their personal data: open the customer → menu → Erase personal data.',
+  'set.privacyBody': 'This app stores customer names, mobile numbers, notes and amounts on this phone. If you connect a shop server, a copy is kept on that server and on your other phones. Nothing is shared with anyone else, and the app sends no messages by itself. With voice entry on, what you say is sent to Google’s speech service; see Voice entry above. In this version the file on the phone is not encrypted; the PIN only stops casual opening. A customer can ask you to erase their personal data: open the customer → menu → Erase personal data.',
   'set.about': 'About',
   'set.version': 'Version {v}',
   'set.engine': 'Database: {e}',
@@ -437,10 +437,10 @@ export const en = {
   'voice.listening': 'Listening…',
   'voice.thinking': 'Checking…',
   'voice.failed': 'Did not work',
-  'voice.stop': 'Done',
+  'voice.stop': 'Stop',
   'voice.tryAgain': 'Try again',
   'voice.hintSay': 'Say:',
-  'voice.hintExample': '“Ramu 100 kuduthaachu”',
+  'voice.hintExample': '“Ramu 100 kattinaan” · “Ramukku 100 kuduthen”',
   'voice.hintSub': 'Name, amount, then paid or took.',
   'voice.nothing': 'Nothing was heard. Speak clearly, near the phone.',
   'voice.unavailable': 'Voice entry is not available on this phone (no Google speech service).',
@@ -501,7 +501,7 @@ export const en = {
   'voice.statKind': 'Debit/Credit changed',
   'voice.statCancel': 'Cancelled',
   'voice.statReset': 'Reset counters',
-  'voice.privacyTitle': 'Privacy',
+  'voice.privacyTitle': 'Voice privacy',
   // ==== end voice entry ====
 
   // ==== accounts & web app (accounts-client agent; keys auth.* / web.* + the v2 server error codes) ====
@@ -603,11 +603,12 @@ export const en = {
   'auth.ev.password.reset': 'Password reset',
   'auth.ev.pair_code.mint': 'Pairing code made',
   'auth.ev.recovery_codes.mint': 'Recovery codes made',
-  'auth.ev.device.revoke': 'Phone removed',
+  'auth.ev.device.revoke': 'Device removed',
   'web.loginTitle': 'Sign in to the shop ledger',
   'web.loginHelp': 'The owner’s user id and password. Staff use the phone app.',
   'web.shared': 'This is a shared computer',
-  'web.sharedHelp': 'Nothing is kept on this computer. The session ends in 12 hours or when the browser closes.',
+  'web.sharedHelpOff': 'If not ticked: a copy of the ledger stays in this browser (the session lasts up to 30 days) and Sign out removes it. Tick the box on a computer that is not yours.',
+  'web.sharedHelpOn': 'Ticked: nothing will be kept on this computer. The session ends in 12 hours or when the browser closes.',
   'web.googleBtn': 'Sign in with Google',
   'web.or': 'or',
   'web.loading': 'Opening the shop…',
@@ -624,6 +625,11 @@ export const en = {
   'web.notFound': 'Server address missing',
   'web.serverProblem': 'The server cannot be reached right now.',
   'web.retry': 'Try again',
+  'web.sharedMode': 'Shared computer: nothing is kept here',
+  'web.saving': 'Saving…',
+  'auth.clientWeb': 'web',
+  'auth.clientPhone': 'phone',
+  'auth.createMinePin': 'Set an app PIN first. The PIN stops whoever holds this phone from creating a web login for the shop (it is a guard on this phone only).',
   // ==== end accounts & web app ====
 } as const;
 

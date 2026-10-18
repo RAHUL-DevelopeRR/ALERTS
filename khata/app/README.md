@@ -73,7 +73,7 @@ The only native library is `libsqlcipher.so`, which comes from `@capacitor-commu
 | Browser / web app | Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`) | `src/platform/speech-web.ts`. Chrome is the tested target (audio goes to Google); Firefox has no API (`available()` false). Bias phrases are sent only where `SpeechRecognitionPhrase` exists. |
 | Tests / e2e | `createFakeSpeech(script)` | `src/platform/fake-speech.ts`. In the web build, `window.__KK_FAKE_SPEECH__ = [["ராமு 100 குடுத்தாச்சு", ...], ...]` (set before the first mic tap, e.g. with Playwright `addInitScript`) replaces the recogniser; `[]` = silence, `["!SPEECH_ERROR:NETWORK"]` = failure; `window.__KK_FAKE_SPEECH_OPTIONS__ = {delayMs, available, permission}`. |
 
-`listen()` rejects with `SPEECH_UNAVAILABLE`, `SPEECH_PERMISSION` or `SPEECH_ERROR:<code>`; silence resolves `[]`. After our own `stop()` (mic tap, the `maxMs` cap, or the app going to the background: `native.ts` / `web.ts` stop the session on `appStateChange` / `visibilitychange`) the session always resolves with what was heard, because Google often answers `stopListening()` with `ERROR_CLIENT` instead of a result. Errors that happened before the stop are still reported.
+`listen()` rejects with `SPEECH_UNAVAILABLE`, `SPEECH_PERMISSION` or `SPEECH_ERROR:<code>`; silence resolves `[]`. After our own `stop()` (mic tap, the `maxMs` cap, or the app going to the background: `native.ts` / `web.ts` stop the session on `appStateChange` / `visibilitychange`) the session always resolves with what was heard, because Google often answers `stopListening()` with `ERROR_CLIENT` instead of a result. Errors that happened before the stop are still reported. Because the plugin starts Google's recogniser in `DICTATION_MODE` (Gboard voice typing), which may keep a session open across pauses instead of ending it after ~1 s of silence, the Android adapter also ends the session itself `PARTIAL_SETTLE_MS` (2.5 s) after the partial transcript last changed; pure silence is still ended only by `maxMs`. A `start()` rejection that never produced `startingListening` (unavailable, no permission, a bridge-level error) leaves the adapter idle at once; only `already running` keeps it waiting for the live native session's `stopped`.
 
 Privacy: `SPEECH_PRIVACY_NOTE` (`src/platform/speech-common.ts`, re-exported from `src/platform/index.ts`) holds the Tamil and English notice that voice audio is sent to Google (Android's speech service, Chrome's backend), that internet is needed, that the app keeps no audio and that nothing is saved before Save is tapped. `localRecognitionAvailable(lang)` in `speech-web.ts` feature-detects Chrome 139+'s on-device mode (`SpeechRecognition.available({langs, processLocally:true})`) inside try/catch; it is informational only and `listen()` never sets `processLocally` (no Tamil pack is known).
 
@@ -175,11 +175,69 @@ with user id & password"), and the owner can use the **web app** that the Worker
 | API client | `src/sync/api.ts` | `mode: 'bearer'` (Android, paired phones: `Authorization: Bearer`) or `mode: 'cookie'` (web app: same-origin relative URLs, `credentials: 'same-origin'`, `X-KK-Client: web` on every request, no Authorization header, no token in storage). New routes: config, prelogin, login, nonce, google, logout, users (list/create/update/password), auth events. Owner-power calls take a `StepUpProof` (`X-KK-Stepup` = current client_key, or `X-KK-Recovery` = printed code). |
 | Engine | `src/sync/engine.ts` | `login()` = prelogin → derive → `/auth/login` → the same `completePairing` path as a code pairing → first sync. Android stores the token and the `known_device` value in secure storage (sent as `X-KK-Known` on later logins: exempt from the per-network lockout). `logout({removeData})` revokes the session (`force` when offline). `stepped()` retries an owner call with a proof from the step-up provider (`src/ui/screens/login.ts` `stepUpDialog`: password or recovery code; the server keeps the device stepped up for 5 minutes). `listUsers / createUser / updateUser / resetPassword / changeOwnPassword / authEvents`. The signed-in account is kept in the private file `account.json` (names only, never credentials). |
 | Android UI | `src/ui/screens/settings.ts`, `src/ui/screens/login.ts` | "Account" block (signed in as…, Change my password, Sign out: keep or remove the ledger), "Create a login for me" for a code-paired owner phone (`link_me`, no step-up while the shop has no users), owner "Users" (add with user id / name / role / password twice / optional Gmail; reset password; disable/enable) and "Activity" (`GET /auth/events`). |
-| Web app | `src/ui/web/**`, `vite build --mode web` → `dist-web/` (`__WEB_APP__`) | Login gate (`login-gate.ts`): owner's user id + password, Google button only when `/v1/config` returns a `google_client_id` (nonce from `/auth/nonce`), "This is a shared computer" (in-memory sql.js database, in-memory private files, `shared_computer: true` → 12 h session, cookie without Max-Age), language toggle. Staff get the `web_owner_only` refusal in Tamil and English. After login: full pull, then the normal UI with the "Online copy" pill. A 401 (expired/revoked session) shows the unsynced count, wipes IndexedDB + localStorage and returns to the login page; Sign out does the same. "+ Customer" works only online and in sync: the browser gets no code block at login and asks for one on demand (`requestCodes()`). Phone-only controls (PIN, pairing form, Call, user management) are hidden. |
+| Web app | `src/ui/web/**`, `vite build --mode web` → `dist-web/` (`__WEB_APP__`) | Login gate (`login-gate.ts`): owner's user id + password, Google button only when `/v1/config` returns a `google_client_id` (nonce from `/auth/nonce`), "This is a shared computer" (in-memory sql.js database, in-memory private files, `shared_computer: true` → 12 h session, cookie without Max-Age), language toggle. The text under the box states what happens in the state it is in (unticked: a copy stays in this browser, 30-day session, Sign out removes it; ticked: nothing kept, 12 h). Boot order (`boot.ts`): a persisted copy is opened only when one already exists; otherwise the app starts on an in-memory database, asks `GET /me` whether the cookie still names a session and, only when the server says it is **not** a shared one (`device.shared`), switches to the persisted database. A reload on a shared computer therefore rebuilds the ledger in memory again and never writes IndexedDB; an unknown answer counts as shared. Staff get the `web_owner_only` refusal in Tamil and English. After login: full pull, then the normal UI with the "Online copy" pill. A 401 (expired/revoked session) shows the unsynced count, wipes IndexedDB + localStorage and returns to the login page; Sign out does the same. "+ Customer" works only online and in sync: the browser gets no code block at login and asks for one on demand (`requestCodes()`). Phone-only controls (PIN, pairing form, Call, user management) are hidden. |
 | Tests | `test/sync.password.test.ts`, `test/sync.accounts.test.ts` | PBKDF2 vector against Node's `pbkdf2`, NFC, bounds, timing; logins, lockout + known device, cookie mode, step-up, user management, Google (fake), web restrictions against the fake server (`test/helpers/fake-server.ts`, which now has users, logins, a cookie jar, step-up and audit events). |
-| End to end | `node e2e/web-login.mjs` | Builds `dist-web`, starts `wrangler dev --local` on a fresh D1 (`api/.wrangler/e2e-web-state`, migrations applied), bootstraps shop + owner phone + logins through the API, drives Chromium through login (ta/en), wrong password, staff refusal, sign-in, synced customers, an entry and a customer, Settings, session revoked from the phone, sign out (storage wiped), shared-computer mode. Screenshots `e2e/screenshots/web-*.png`. |
+| End to end | `node e2e/web-login.mjs` | Builds `dist-web`, starts `wrangler dev --local` on a fresh D1 (`api/.wrangler/e2e-web-state`, migrations applied), bootstraps shop + owner phone + logins through the API, drives Chromium through login (ta/en), wrong password, staff refusal, sign-in, synced customers, an entry and a customer, Settings, session revoked from the phone, sign out (storage wiped), shared-computer mode including a reload (still no IndexedDB, same session). Screenshots `e2e/screenshots/web-*.png`. |
 
 Deploy: `tools/deploy-server.sh` builds the web app (`npm ci && vite build --mode web` in this folder) before
 `wrangler deploy` and prints the web app URL. The web app's security headers (CSP with `'wasm-unsafe-eval'` for sql.js
 and the Google Identity Services origins) come from `khata/api/web/_headers`.
 <!-- =================== end Accounts & web app =================== -->
+
+<!-- =================== Voice entry (v2) =================== -->
+## Voice entry (v2)
+
+The shopkeeper can speak an entry instead of typing it: a round mic button beside the Home search, a mic icon in the
+customer page's top bar and one beside the quick-entry search (all hidden when Settings → Voice entry is Off, or
+while the ledger is still empty). Everything is free: Android uses Google's speech service on the phone, the web app
+uses Chrome's Web Speech API, and the parser is a small rule-based lexicon inside the app (`src/core/voice.ts`,
+no cloud NLU, no paid API).
+
+**Rule that never bends: money is never saved from voice.** Listening ends on the normal entry keypad, prefilled,
+with a "Heard: “…”" banner, and only the shopkeeper's tap on **Save** writes the entry (the same Save path, with the
+same large-amount / advance / duplicate confirmations and the Undo toast).
+
+| Piece | Where | Notes |
+|---|---|---|
+| Parser | `src/core/voice.ts` | `parseUtterance(alternatives, customers, settings, {contextCustomerId})` → one `VoiceIntent` per spoken entry: customer matches (fuzzy, transliteration-tolerant, Tamil script or Tanglish), amount (digits, Tamil or English number words, "ஐநூறு", "two fifty", lakh), direction, note, confidence. Direction: `-kku` (dative) + gave = **DEBIT** (பற்று, goods given on udhaar); "Ramu 100 kattinaan / kuduthaachu" (no `-kku`) = **CREDIT** (வரவு, payment received); a bare "kuduthaachu" without `-kku` follows the shop's setting; "paaru / parru / paru" are never read as பற்று. When Google returns several alternatives and they disagree on the amount or on the dative, the parser caps confidence or leaves the direction unset. Lexicon: `LEXICON_SIZE` surface forms + 12 regex conjugation fallbacks. |
+| Flow | `src/ui/voice/listen.ts`, `plan.ts`, `prefill.ts` | First tap: the privacy notice (`SPEECH_PRIVACY_NOTE`, remembered). Then recogniser check → internet check → mic permission → listening bottom sheet (pulsing mic, live partial transcript, hint, Cancel / Done, 12 s cap). One strong match (score ≥ 0.85 and 0.10 ahead) or the page's own customer → the keypad; several candidates → a picker (name, code, balance); nobody → "Add new customer “Suresh”?" → customer form → keypad; "Ramu baaki evvalavu" → balance dialog; no name on Home → "say the name too". Two entries in one sentence run as a queue ("1 of 2"). |
+| Entry screen | `src/ui/screens/entry.ts`, `src/ui/voice/banner.ts` | Banner with the heard words, the amount source in large type ("five hundred → ₹500"), balance before → after, "check before saving" for medium/low confidence, other heard amounts as chips ("Or did you say: ₹100 ₹1,000"). Direction unclear → neither Debit nor Credit preselected, title "Debit or Credit?", Save disabled until one is tapped. |
+| Settings | `src/ui/voice/settings-section.ts` | On/Off, spoken language (தமிழ் / English), what a bare "Ramu 100 kuduthaachu" means in this shop (Credit — paid, default; or Debit — took goods), **Try voice** (speak or type a sentence, see customer / amount / direction / confidence; saves nothing), local counters (heard, saved, amount changed, Debit/Credit changed, cancelled; `voice_stats` in meta, never synced) and the privacy line. Prefs in meta key `voice_prefs`. |
+| Speech engines | `src/platform/speech-*.ts` | See "Speech-to-text (voice entry, v2)" above: Google `SpeechRecognizer` on Android (`@capgo/capacitor-speech-recognition`), Web Speech in Chrome, `window.__KK_FAKE_SPEECH__` in tests and e2e. |
+| i18n | `voice.*` block at the end of `src/i18n/en.ts` / `ta.ts` | Shop Tamil, not textbook Tamil ("கேட்கிறேன்…", "பற்றா, வரவா?"). |
+| Tests | `test/voice.test.ts` (fixture cases in `test/fixtures/voice-utterances.json` + `voice-customers.json`, per-category accuracy printed), `test/review-voice.test.ts` (120 reviewer utterances with a confusable-name shop list: 0 wrong directions, 0 wrong 'high'), `test/ui.voice.test.ts`, `test/platform.speech.test.ts`, `test/review-speech-platform.test.ts` | Every fixture enforces the safety invariants: 'high' only with an undisputed amount, an explicit verb or label and one clearly best customer. |
+| End to end | `node e2e/voice.mjs` | Chromium with the fake recogniser: Credit, Debit with a note, two Ramus → picker, page customer kept, new customer, unclear direction (Save disabled), two entries in one sentence, disagreeing alternatives → chips, balance question, silence, NETWORK error, unavailable, counters, bare-meaning flip, English UI, Voice Off hides the mics. Screenshots `e2e/screenshots/voice-*.png`. |
+
+Known weak spots (in-distribution fixtures, not field data): a second number next to the rupee word can win
+("Senthil 300 pathu rooba" → ₹10, the keypad shows it and the shopkeeper corrects it); the amount/dative cross-check
+only helps when Google returns more than one alternative (ta-IN often returns one); honorifics and fillers are
+handled from a fixed list.
+<!-- =================== end Voice entry =================== -->
+
+<!-- =================== Verification status (v2) =================== -->
+## What was and was not tested on a real phone
+
+No physical phone or emulator was available for v2. Everything below the line "on a phone" is verified from source
+code, the Workers runtime and headless Chromium only.
+
+Verified here:
+
+- `npx tsc --noEmit -p .` clean; `npx vitest run` green (unit + reviewer suites, no skipped-as-failing tests);
+  `vite build`, `vite build --mode web`, `vite build --mode android` + `cap sync android` + `gradlew assembleDebug`.
+- `node e2e/flows.mjs` (v1 flows, Tamil + English), `node e2e/voice.mjs` (voice flows with the fake recogniser),
+  `node e2e/web-login.mjs` (web app against `wrangler dev --local`), and `test/sync.integration.test.ts` (two
+  engines against `wrangler dev`).
+- Merged manifest permissions: INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO (+ the signature-only
+  `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`); `<queries>` for the speech service; 16 KB page alignment.
+
+Not verified on a phone (check these first on the real device, and keep the paper book for the first weeks):
+
+- Google's speech service for `ta-IN`: how many alternatives it returns, partial-result timing, how it behaves with
+  the plugin's `DICTATION_MODE`, the RECORD_AUDIO prompt, and recognition quality for the shop's names.
+- The Android SQLite plugin, Tamil keyboards, WhatsApp sharing and the self-test (unchanged from v1, still unverified
+  on hardware).
+- Password login from the Android app against a deployed Worker (verified against `wrangler dev` from Node and
+  Chromium only), secure-storage of the token and `known_device`, and the step-up dialog on a phone.
+- Google sign-in on the web against real Google Identity Services (no OAuth client id here; the nonce flow is
+  exercised against the fake server only). Android Google sign-in is not built.
+<!-- =================== end Verification status =================== -->

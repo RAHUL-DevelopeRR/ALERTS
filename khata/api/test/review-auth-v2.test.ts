@@ -2,8 +2,8 @@
  * Security review of the v2 accounts code against plan-findings 5-7 and 12-20 (second pass, after the hardening
  * build). Two groups:
  *   R1. contract checks that PROVE a finding is fixed (all pass);
- *   R2. gaps still open. Each R2 test asserts the CORRECT behaviour and is marked `it.fails`, so the suite stays green
- *       while the gap exists: once the server fixes it, the test "unexpectedly passes" and `.fails` must be removed.
+ *   R2. gaps found by the review, since fixed (each test asserts the correct behaviour; they were `it.fails` while the
+ *       gap existed).
  */
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
@@ -120,7 +120,7 @@ describe('R1. verified fixes (contracts beyond hardening.test.ts)', () => {
     ]);
   });
 
-  it('R1g [F16] consequence of the daily budget design: 100 requests from one /24 (5 failures + 95 refused by its own lock) throttle every NEW device of the shop for the day; known devices still get in', async () => {
+  it('R1g [F16] 100 requests from one /24 (5 failures + 95 refused by its own lock) cost the shop 5 of its daily budget, not 100: a NEW device elsewhere still logs in, and so does the known phone', async () => {
     const { password } = await ownerWithUser();
     const first = await login(OWNER.username, password, { headers: from('203.0.113.9') }); // the owner's phone, known from now on
     const known = { 'X-KK-Known': first.body.known_device };
@@ -132,22 +132,24 @@ describe('R1. verified fixes (contracts beyond hardening.test.ts)', () => {
       statuses.add(r.status);
     }
     expect([...statuses].sort()).toEqual([403, 429]);
-    expect(await dailyCount()).toBe(100);
+    expect(await dailyCount()).toBe(5);
     const newLaptop = await login(OWNER.username, password, { headers: from('192.0.2.10') });
-    expect(newLaptop.status).toBe(429);
-    expect(newLaptop.body.error).toBe('throttled');
+    expect(newLaptop.status).toBe(200);
+    expect(await dailyCount()).toBe(5); // a success gives its own attempt back
     expect((await login(OWNER.username, password, { headers: { ...from('203.0.113.9'), ...known } })).status).toBe(200);
   });
 });
 
 // ================================================================================================ R2: open gaps
-describe('R2. open gaps (each asserts the correct behaviour; it.fails until the server fixes it)', () => {
-  it.fails('R2a [F6] demoting an owner to staff must end their WEB sessions (the web is owner-only); today the staff web session stays alive', async () => {
+describe('R2. gaps found by the review, now fixed', () => {
+  it('R2a [F6] demoting an owner to staff ends their WEB sessions (the web is owner-only); their phone session stays', async () => {
     const { o } = await ownerWithUser();
     const kavi = await createUser(o.token, 'kavi', 'k-pass', { role: 'owner', display_name: 'Kavi' });
     const w = await login('kavi', 'k-pass', { client: 'web' });
     expect(w.status).toBe(200);
     const cookie = sessionCookie(w);
+    const phone = await login('kavi', 'k-pass');
+    expect(phone.status).toBe(200);
     const demote = await call('PUT', `/users/${kavi.id}`, { token: o.token, headers: await ownerStepup(), body: { role: 'staff' } });
     expect(demote.status).toBe(200);
     expect(demote.body.user.role).toBe('staff');
@@ -156,32 +158,95 @@ describe('R2. open gaps (each asserts the correct behaviour; it.fails until the 
     // ...so the existing one must be gone too
     expect((await webCall('GET', '/me', cookie)).status).toBe(401);
     expect((await webCall('GET', '/sync/pull?since=0', cookie)).status).toBe(401);
+    // the phone session of the demoted user keeps working, now as staff; the audit row says the web sessions ended
+    expect((await call('GET', '/me', { token: phone.body.token! })).body.device.role).toBe('staff');
+    const ev = await env.DB.prepare(`SELECT detail FROM auth_events WHERE action = 'user.update' ORDER BY at DESC LIMIT 1`).first<string>('detail');
+    expect(JSON.parse(ev ?? '{}')).toEqual({ role: 'staff', web_sessions_ended: true });
+    // promoting back does not resurrect the revoked browser session
+    expect((await call('PUT', `/users/${kavi.id}`, { token: o.token, headers: await ownerStepup(), body: { role: 'owner' } })).status).toBe(200);
+    expect((await webCall('GET', '/me', cookie)).status).toBe(401);
   });
 
-  it.fails('R2b [F16] attempts refused by the per-source lock never reached the verifier and must not burn the shop-wide daily budget; today each one does', async () => {
+  it('R2b [F16] attempts refused by the per-source lock never reach the verifier and do not burn the shop-wide daily budget', async () => {
     await ownerWithUser();
     for (let i = 0; i < 5; i++) expect((await login(OWNER.username, 'guess', { headers: from('198.51.100.10') })).status).toBe(403);
     expect(await dailyCount()).toBe(5);
     for (let i = 0; i < 10; i++) expect((await login(OWNER.username, 'guess', { headers: from('198.51.100.11') })).body.error).toBe('locked');
     expect(await dailyCount()).toBe(5);
+    // a throttled day: the lock still answers first and costs nothing; a locked source cannot grab the 30 s slot
+    const future = new Date(Date.now() + 30_000).toISOString();
+    await env.DB.prepare('UPDATE auth_failures SET count = 100, next_allowed_at = ? WHERE day = ?').bind(future, utcDay()).run();
+    expect((await login(OWNER.username, 'guess', { headers: from('198.51.100.12') })).body.error).toBe('locked');
+    expect((await login(OWNER.username, 'guess', { headers: from('198.51.102.1') })).body.error).toBe('throttled');
+    expect(await dailyCount()).toBe(100);
   });
 
-  it.fails('R2c [F15] money-relevant owner routes PUT /shop (UPI id) and POST /customers/:id/erase are reachable from a web session with no step-up', async () => {
+  it('R2c [F15] money-relevant owner routes PUT /shop (UPI id) and POST /customers/:id/erase need step-up from every session; name/lang do not', async () => {
     const { o, password } = await ownerWithUser();
     const k = customer({ code: o.code_block.start });
     expect((await push(o.token, { customers: [k] })).status).toBe(200);
     const cookie = sessionCookie(await login(OWNER.username, password, { client: 'web' }));
     const upi = await webCall('PUT', '/shop', cookie, { body: { upi_id: 'attacker@upi' } });
     expect(upi.status).toBe(403);
+    expect(upi.body.error).toBe('stepup_required');
     const erase = await webCall('POST', `/customers/${k.id}/erase`, cookie, { body: {} });
     expect(erase.status).toBe(403);
+    expect(erase.body.error).toBe('stepup_required');
+    // the phone too (the shop has users now, so the bootstrap exemption is over)
+    expect((await call('PUT', '/shop', { token: o.token, body: { upi_id: 'ravi@okaxis' } })).body.error).toBe('stepup_required');
+    expect((await call('POST', `/customers/${k.id}/erase`, { token: o.token, body: {} })).body.error).toBe('stepup_required');
+    expect((await env.DB.prepare('SELECT upi_id FROM shops').first<string | null>('upi_id'))).toBeNull();
+    expect((await env.DB.prepare('SELECT erased_at FROM customers WHERE id = ?').bind(k.id).first('erased_at'))).toBeNull();
+    // name and language stay free of step-up; the same UPI value is not a change
+    expect((await call('PUT', '/shop', { token: o.token, body: { name: 'Ravi Stores', lang: 'en', upi_id: null } })).status).toBe(200);
+    // with a proof both go through (from the phone and from the web), and both are audited
+    const ok = await call('PUT', '/shop', { token: o.token, headers: await ownerStepup(), body: { upi_id: 'ravi@okaxis' } });
+    expect(ok.status).toBe(200);
+    expect(ok.body.shop.upi_id).toBe('ravi@okaxis');
+    const webStep = await webCall('POST', `/customers/${k.id}/erase`, cookie, { body: {} });
+    expect(webStep.status).toBe(403); // the window belongs to the phone's device row, not to the browser
+    const erased = await call('POST', `/customers/${k.id}/erase`, { token: o.token, body: {} }); // inside the phone's window
+    expect(erased.status).toBe(200);
+    expect(erased.body.customer.erased_at).not.toBeNull();
+    const actions = await env.DB.prepare(`SELECT action, detail FROM auth_events WHERE action IN ('shop.update', 'customer.erase') ORDER BY at, id`).all();
+    expect(actions.results).toEqual([
+      { action: 'shop.update', detail: JSON.stringify({ upi_id: 'ravi@okaxis' }) },
+      { action: 'customer.erase', detail: JSON.stringify({ customer_id: k.id }) },
+    ]);
+    expect((await call('POST', `/customers/${crypto.randomUUID()}/erase`, { token: o.token, body: {} })).status).toBe(404);
   });
 
-  it.fails('R2d [F17] on a shared computer no persistent cookie may be left behind: kk_known is set for a year', async () => {
+  it('R2d [F17] on a shared computer no persistent cookie is left behind: kk_session and kk_known both die with the browser', async () => {
     const { password } = await ownerWithUser();
     const shared = await login(OWNER.username, password, { client: 'web', shared_computer: true });
     expect(shared.status).toBe(200);
     expect(cookiePart(shared, 'kk_session')).not.toMatch(/Max-Age/i);
-    expect(cookiePart(shared, 'kk_known')).not.toMatch(/Max-Age/i);
+    expect(cookiePart(shared, 'kk_known')).toBe('');
+    expect(typeof shared.body.known_device).toBe('string'); // the page may keep it in memory for its own life
+    const kept = await login(OWNER.username, password, { client: 'web' });
+    expect(cookiePart(kept, 'kk_known')).toMatch(/Max-Age=31536000/);
+  });
+
+  it('R2e [F17, for the web boot fix] a resumed session can tell it is shared: LoginResponse.shared and GET /me device.shared / expires_at', async () => {
+    const { o, password } = await ownerWithUser();
+    const shared = await login(OWNER.username, password, { client: 'web', shared_computer: true });
+    expect(shared.body.shared).toBe(true);
+    expect(typeof shared.body.expires_at).toBe('string');
+    const me = await webCall('GET', '/me', sessionCookie(shared));
+    expect(me.status).toBe(200);
+    expect(me.body.device.shared).toBe(true);
+    expect(me.body.device.expires_at).toBe(shared.body.expires_at);
+    expect(Date.parse(me.body.device.expires_at) - Date.parse(me.body.device.created_at)).toBe(12 * 3_600_000);
+    const kept = await login(OWNER.username, password, { client: 'web' });
+    expect(kept.body.shared).toBe(false);
+    const me2 = await webCall('GET', '/me', sessionCookie(kept));
+    expect(me2.body.device.shared).toBe(false);
+    expect(Date.parse(me2.body.device.expires_at) - Date.parse(me2.body.device.created_at)).toBe(30 * 86_400_000);
+    const phone = await login(OWNER.username, password);
+    expect(phone.body.shared).toBe(false);
+    expect((await call('GET', '/me', { token: phone.body.token! })).body.device).toMatchObject({ shared: false, expires_at: null });
+    expect((await call('GET', '/me', { token: o.token })).body.device).toMatchObject({ shared: false, expires_at: null, client: null });
+    const list = await call('GET', '/devices', { token: o.token });
+    expect(list.body.devices.filter((d: { shared: boolean }) => d.shared).map((d: { id: string }) => d.id)).toEqual([shared.body.device_id]);
   });
 });

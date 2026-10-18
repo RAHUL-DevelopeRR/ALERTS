@@ -142,7 +142,10 @@ export function setSessionCookie(c: Context<AppEnv>, token: string, shared: bool
   setCookie(c, SESSION_COOKIE, token, shared ? COOKIE_BASE : { ...COOKIE_BASE, maxAge: WEB_SESSION_DAYS * 86_400 });
 }
 
-/** The known-device cookie (one year): exempts this browser from the per-source login throttles. */
+/**
+ * The known-device cookie (one year): exempts this browser from the per-source login throttles. Not set for a
+ * shared-computer login (nothing persistent may be left on that PC; the body still carries `known_device`).
+ */
 export function setKnownCookie(c: Context<AppEnv>, value: string): void {
   setCookie(c, KNOWN_DEVICE_COOKIE, value, { ...COOKIE_BASE, maxAge: 365 * 86_400 });
 }

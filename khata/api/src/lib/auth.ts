@@ -51,7 +51,7 @@ export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
            requests_today = CASE WHEN requests_day = ?4 THEN requests_today + 1 ELSE 1 END,
            requests_day = ?4
          WHERE token_hash = ?1 AND ${LIVE}
-         RETURNING id, shop_id, name, role, created_at, last_seen_at, revoked_at, requests_today, user_id, client, stepup_until`,
+         RETURNING id, shop_id, name, role, created_at, last_seen_at, revoked_at, requests_today, user_id, client, stepup_until, expires_at`,
       )
       .bind(hash, nowIso, cred.via, day),
     db

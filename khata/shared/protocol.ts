@@ -93,6 +93,13 @@ export interface DeviceInfo {
   client?: ClientKind | null;
   /** v2 (additive): the user account this device belongs to; null/absent = a v1 paired device. */
   user_id?: string | null;
+  /** v2 (additive): when this session ends (web sessions only); null/absent = never. */
+  expires_at?: string | null;
+  /**
+   * v2 (additive): true for a web session opened with shared_computer (WEB_SHARED_SESSION_HOURS). GET /me reports it
+   * so a reloaded page can keep that session in memory and never persist the ledger on that computer.
+   */
+  shared?: boolean;
 }
 
 /** Every successful JSON response from an authenticated route includes these. */
@@ -179,14 +186,14 @@ export interface DevicesResponse extends Envelope { devices: DeviceInfo[] }
 export interface RevokeRequest { wipe?: boolean }
 export interface OkResponse extends Envelope { ok: true }
 
-/** PUT /v1/shop  (owner) */
+/** PUT /v1/shop  (owner; step-up when upi_id changes: 403 stepup_required / stepup_invalid; audited shop.update) */
 export interface ShopUpdateRequest { name?: string; upi_id?: string | null; lang?: Lang }
 export interface ShopUpdateResponse extends Envelope { shop: ShopInfo }
 
 /**
- * POST /v1/customers/:id/erase  (owner). DPDP erasure: name/search_name/phone/note are overwritten with
- * "Erased <YYYY-MM-DD>" (search_name/phone/note -> null), erased_at and received_at = server clock,
- * one change-log row appended. Entries are kept. Returns the updated row.
+ * POST /v1/customers/:id/erase  (owner, step-up: 403 stepup_required / stepup_invalid; audited customer.erase).
+ * DPDP erasure: name/search_name/phone/note are overwritten with "Erased <YYYY-MM-DD>" (search_name/phone/note ->
+ * null), erased_at and received_at = server clock, one change-log row appended. Entries are kept. Returns the row.
  */
 export interface EraseResponse extends Envelope { customer: CustomerRow }
 
@@ -389,8 +396,9 @@ export interface PreloginResponse { salt: string; iterations: number }
  * visible to every phone through pulled entries. Recovery-kind codes are never moved onto a 'web' device (they stay
  * on the revoked row and keep working at /pair).
  *
- * shared_computer (web only): the session ends after WEB_SHARED_SESSION_HOURS and the cookie has no Max-Age
- * (dies with the browser). Staff when staff web arrives: the server will force it.
+ * shared_computer (web only): the session ends after WEB_SHARED_SESSION_HOURS, the cookie has no Max-Age (dies
+ * with the browser) and no kk_known cookie is set (known_device is still in the body, for the page's life only).
+ * Staff when staff web arrives: the server will force it.
  */
 export interface LoginExtras {
   device_name: string;
@@ -427,12 +435,15 @@ export interface LoginRequest extends LoginExtras {
  * HttpOnly kk_session cookie); a string for 'android' (store it like a paired token).
  * `code_block` is null for client 'web': the web never creates customers offline; it syncs first and asks
  * POST /devices/code-block when it needs codes (so a browser does not burn 50 codes per login).
- * `known_device`: store it (Android: secure storage, sent later as X-KK-Known; web: the kk_known cookie is set too).
+ * `known_device`: store it (Android: secure storage, sent later as X-KK-Known; web: the kk_known cookie is set too,
+ * except on a shared computer, where nothing persistent is written and the value should stay in memory).
  * `expires_at`: when this session ends (web only), else null.
  */
 export interface LoginResponse extends Omit<PairResponse, 'token' | 'code_block'> {
   token: string | null;
   code_block: { start: number; end: number } | null;
+  /** true when the login asked for shared_computer (web only; the server then sets no persistent cookie). */
+  shared: boolean;
   user: UserSummary;
   known_device: string;
   expires_at: string | null;
@@ -464,8 +475,10 @@ export interface GoogleLoginRequest extends LoginExtras { id_token: string }
 // ---------------------------------------------------------------- v2: step-up, web restrictions, audit
 //
 // Owner-power routes: POST /users, PUT /users/:id (role, google_email, disabled), PUT /users/:id/password for ANOTHER
-// user, POST /devices/pair-code, POST /devices/recovery-codes, POST /devices/:id/revoke.
-//  - client 'web' sessions are refused: 403 {error:'web_forbidden'} (GET /users and GET /auth/events stay readable).
+// user, POST /devices/pair-code, POST /devices/recovery-codes, POST /devices/:id/revoke; and, from ANY owner session
+// (web included), PUT /shop when upi_id changes and POST /customers/:id/erase (step-up, no web_forbidden).
+//  - client 'web' sessions are refused on the first group: 403 {error:'web_forbidden'} (GET /users and
+//    GET /auth/events stay readable).
 //  - Every other caller must be stepped up: either the header `X-KK-Stepup: <client_key>` (the caller's CURRENT
 //    client_key, derived exactly as for login; verified like a login and subject to the same 5-failure backoff) or
 //    `X-KK-Recovery: <printed recovery code>` (consumed). A proof keeps the device stepped up for STEPUP_WINDOW_MIN
@@ -485,8 +498,10 @@ export interface AuthEvent {
   actor_user_id: string | null;
   /**
    * login.ok | login.failed | login.locked | login.refused (web_owner_only) | google.ok | google.failed | logout |
-   * stepup.ok | stepup.failed | user.create | user.update | password.change | password.reset |
-   * pair_code.mint | recovery_codes.mint | device.revoke
+   * stepup.ok | stepup.failed | user.create | user.update (detail has web_sessions_ended: true when a demotion
+   * revoked the user's web sessions) | password.change | password.reset | pair_code.mint | recovery_codes.mint |
+   * device.revoke | shop.update (detail: the changed fields; written only when upi_id changed) |
+   * customer.erase (detail: {customer_id})
    */
   action: string;
   target_user_id: string | null;
@@ -529,7 +544,8 @@ export interface UserResponse extends Envelope { user: UserInfo }
  * PUT /v1/users/:id  (owner device, not web; step-up when role, google_email or disabled is present).
  * Changing google_email unlinks the old Google account and restarts the GOOGLE_EMAIL_LINK_HOURS window.
  * disabled: true revokes all of that user's devices (and the unused codes they issued) in the same transaction;
- * disabled: false re-enables the login (devices stay revoked). A role change applies to the user's live devices.
+ * disabled: false re-enables the login (devices stay revoked). A role change applies to the user's live devices;
+ * a user who stops being an owner loses their web sessions in the same transaction (the web is owner-only).
  * Errors: 400 cannot_change_own_role, 400 cannot_disable_self, 409 last_owner (would leave no enabled owner user),
  * 409 google_email_taken, 404 not_found, 403 web_forbidden, 403 stepup_required / stepup_invalid.
  */

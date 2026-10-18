@@ -6,6 +6,8 @@ html.${WEB_HTML_CLASS} [data-testid="act-call"] { display: none; }
 html.${WEB_HTML_CLASS} .actions3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 html.${WEB_HTML_CLASS} .screen { max-width: 720px; margin: 0 auto; box-shadow: 0 0 24px rgba(0, 0, 0, .08); }
 html.${WEB_HTML_CLASS} body { background: #e6ebe8; }
+/* the login card is white inside the dark gate: links (the password Show/Hide toggle) keep the brand colour there */
+html.${WEB_HTML_CLASS} .gate .web-login-card .card .link { color: var(--brand); }
 `;
 
 export function injectWebStyles(): void {

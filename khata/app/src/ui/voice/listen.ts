@@ -47,19 +47,22 @@ export async function startVoice(opts: VoiceStartOptions = {}): Promise<void> {
   }
 }
 
-async function run(opts: VoiceStartOptions): Promise<void> {
-  const prefs = await loadVoicePrefs();
-  if (!prefs.on) return;
+/**
+ * Everything that must be true before the recogniser starts, for the mic buttons and for the Settings tester alike:
+ * recogniser present, internet (Google speech is online-only), the privacy notice accepted once, mic permission.
+ * Shows the reason as a toast or the notice dialog; resolves false when listening must not start.
+ */
+export async function voicePreflight(): Promise<boolean> {
   const speech = app.platform.speech;
   if (!(await speech.available())) {
     toast(t('voice.unavailable'), { error: true, ms: 5000 });
-    return;
+    return false;
   }
   if (!(await app.platform.isOnline())) {
     toast(t('voice.offline'), { error: true, ms: 5000 });
-    return;
+    return false;
   }
-  if (!prefs.notice_ok) {
+  if (!(await loadVoicePrefs()).notice_ok) {
     const ok = await dialog<boolean>({
       title: t('voice.noticeTitle'),
       body: h('p', { class: 'pre', attrs: { 'data-testid': 'voice-notice' }, text: SPEECH_PRIVACY_NOTE[getLang()] }),
@@ -69,13 +72,21 @@ async function run(opts: VoiceStartOptions): Promise<void> {
       ],
       dismissValue: false,
     });
-    if (!ok) return;
+    if (!ok) return false;
     await saveVoicePrefs({ notice_ok: true });
   }
   if (!(await speech.ensurePermission())) {
     toast(t('voice.denied'), { error: true, ms: 6000 });
-    return;
+    return false;
   }
+  return true;
+}
+
+async function run(opts: VoiceStartOptions): Promise<void> {
+  const prefs = await loadVoicePrefs();
+  if (!prefs.on) return;
+  const speech = app.platform.speech;
+  if (!(await voicePreflight())) return;
 
   const rows = await app.repo.listHome();
   const customers = toVoiceCustomers(rows);
@@ -177,6 +188,9 @@ function openListening(o: { onCancel: () => void; onStop: () => void }): ListenC
     fail(message, retry) {
       state.textContent = t('voice.failed');
       mic.className = 'voice-mic failed';
+      // The live line must not keep saying "Listening…" under a red mic: the message below carries what was heard.
+      live.textContent = '—';
+      live.classList.add('placeholder');
       msg.textContent = message;
       msg.classList.remove('hidden');
       doneBtn.textContent = t('voice.tryAgain');

@@ -108,10 +108,12 @@ interface LiveUser {
 
 /**
  * Step 2. Order: per-IP limiter, body validation (junk never touches a counter), known-device check (one indexed
- * SELECT, only when the request carries a value), the shop-wide daily failure budget (auth_failures; unknown sources
- * only), then ONE batch that atomically records this attempt as a failure for (username, source) unless that pair is
- * locked, then the constant-time verifier check. Real and unknown usernames take the same path. A success resets the
- * pair and gives the daily attempt back in the batch that creates the device.
+ * SELECT, only when the request carries a value), ONE batch that atomically records this attempt as a failure for
+ * (username, source) unless that pair is locked, then (unknown sources only, and only for an attempt the lock let
+ * through) the shop-wide daily failure budget (auth_failures), then the constant-time verifier check. An attempt the
+ * lock refused never reaches the verifier, so it costs the shop nothing: one network cannot spend the whole shop's
+ * daily budget with requests its own lock answers. Real and unknown usernames take the same path. A success resets
+ * the pair and gives the daily attempt back in the batch that creates the device.
  */
 authRoutes.post('/auth/login', async (c) => {
   if (!(await ipAllowed(c, 'login'))) return fail(c, 429, 'throttled');
@@ -129,9 +131,6 @@ authRoutes.post('/auth/login', async (c) => {
   const now = new Date();
   const knownId = await verifyKnownDevice(db, pepper, readKnownDevice(c), username);
   const source = knownId ? `known:${knownId}` : requestSource(c);
-  if (!knownId && !(await reserveDailyAttempt(db, 'auth_failures', now, intVar(c.env.AUTH_THROTTLE_AFTER, 100)))) {
-    return fail(c, 429, 'throttled');
-  }
 
   const [userRes, attempt, lockRes] = await db.batch([
     db
@@ -144,14 +143,17 @@ authRoutes.post('/auth/login', async (c) => {
   ]);
   const user = userRes?.results?.[0] as LiveUser | undefined;
   const allowed = (attempt?.results?.length ?? 0) > 0;
-  // Always do the verifier work, so every path costs the same.
-  const ok = await checkClientKey(pepper, clientKey, user?.pw_verifier);
-  const detail = { username, source, client: extras.client };
   if (!allowed) {
     const retry = retryAfterSeconds((lockRes?.results?.[0] as { locked_until: string | null } | undefined)?.locked_until, now);
     c.header('Retry-After', String(retry));
     return fail(c, 429, 'locked', { retry_after: retry });
   }
+  if (!knownId && !(await reserveDailyAttempt(db, 'auth_failures', now, intVar(c.env.AUTH_THROTTLE_AFTER, 100)))) {
+    return fail(c, 429, 'throttled');
+  }
+  // Always do the verifier work, so every path past the counters costs the same.
+  const ok = await checkClientKey(pepper, clientKey, user?.pw_verifier);
+  const detail = { username, source, client: extras.client };
   if (!ok || !user) {
     const lockedNow = ((attempt?.results?.[0] as { locked_until: string | null } | undefined)?.locked_until ?? null) !== null;
     await audit(db, now, {
@@ -193,7 +195,7 @@ authRoutes.post('/auth/google', async (c) => {
 
   let verified: Awaited<ReturnType<typeof verifyGoogleIdToken>>;
   try {
-    verified = await verifyGoogleIdToken(body.id_token, audiences);
+    verified = await verifyGoogleIdToken(body.id_token, audiences, Date.now(), c.env.GOOGLE_HD);
   } catch (err) {
     console.error('google jwks unavailable', err instanceof Error ? err.message : 'unknown');
     return fail(c, 503, 'unavailable');
@@ -324,7 +326,9 @@ async function issueLogin(
   const known = await knownDeviceValue(pepper, deviceId);
   if (web) {
     setSessionCookie(c, token, extras.shared);
-    setKnownCookie(c, known);
+    // A shared computer gets no persistent cookie at all: the known-device value is in the body for this page's
+    // life only (the client keeps it in memory), never in a one-year cookie on a PC the owner does not control.
+    if (!extras.shared) setKnownCookie(c, known);
   }
   return c.json<LoginResponse>({
     token: web ? null : token,
@@ -337,5 +341,6 @@ async function issueLogin(
     user: { id: summary.id, username: summary.username, display_name: summary.display_name, role: summary.role },
     known_device: known,
     expires_at: expires,
+    shared: web && extras.shared,
   });
 }

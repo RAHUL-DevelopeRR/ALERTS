@@ -119,6 +119,7 @@ export const customerEditScreen: Screen = async (root, route) => {
       return;
     }
     phoneErr.classList.add('hidden');
+    const note = noteIn.value;
     saving = true;
     for (const b of footer.querySelectorAll('button')) b.disabled = true;
     try {
@@ -136,13 +137,13 @@ export const customerEditScreen: Screen = async (root, route) => {
         }
       }
       if (existing) {
-        await app.repo.updateCustomer(existing.id, { name, phone, note: noteIn.value });
+        await app.repo.updateCustomer(existing.id, { name, phone, note });
         afterWrite();
         toast(t('cust.saved'));
         router.back();
         return;
       }
-      const c = await app.repo.createCustomer({ name, phone, note: noteIn.value });
+      const c = await app.repo.createCustomer({ name, phone, note });
       afterWrite();
       toast(t('cust.savedAs', { code: formatCode(c.code) }));
       if (voice) {
@@ -181,7 +182,15 @@ export const customerEditScreen: Screen = async (root, route) => {
       ),
     );
   }
-  if (!existing) setTimeout(() => (nameIn.value ? phoneIn : nameIn).focus(), 50);
+  // Open the keyboard on the first empty field, unless a field already has focus: a late focus() would move the
+  // caret mid-typing (seen as a note landing in the phone field, where normalizePhone drops the letters: the
+  // customer was then saved with a valid number and no note).
+  if (!existing) {
+    setTimeout(() => {
+      if (root.contains(document.activeElement) && document.activeElement !== root) return;
+      (nameIn.value ? phoneIn : nameIn).focus();
+    }, 50);
+  }
 };
 
 /** "There is already a Murugan (C-0017, note). Open existing / Add new". Returns an id, 'new', or null (cancel). */

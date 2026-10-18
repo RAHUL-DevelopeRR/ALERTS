@@ -505,8 +505,10 @@ export class FakeServer {
     const token = `tok-${tokenCounter}-${Math.random().toString(36).slice(2)}`;
     const now = this.nowIso();
     const web = ex.client === 'web';
+    const expires = web ? new Date(this.clock() + (ex.shared ? 12 * 3_600_000 : 30 * 86_400_000)).toISOString() : null;
     this.devices.set(id, {
-      info: { id, name: ex.name, role: u.info.role, created_at: now, last_seen_at: null, revoked_at: null, client: ex.client, user_id: u.info.id },
+      // Like the real server (api/src/lib/rows.ts toDeviceInfo): GET /me reports expires_at and the derived `shared`.
+      info: { id, name: ex.name, role: u.info.role, created_at: now, last_seen_at: null, revoked_at: null, client: ex.client, user_id: u.info.id, expires_at: expires, shared: web && ex.shared },
       token, shop_id: this.shop.id, wipe: false, requests: 0, user_id: u.info.id, client: ex.client,
     });
     if (ex.prev) {
@@ -520,15 +522,15 @@ export class FakeServer {
     this.known.set(known, u.info.id);
     if (web) {
       this.webCookie = token;
-      this.knownCookie = known;
+      // A shared computer gets no persistent kk_known cookie (api/src/routes/auth.ts issueLogin).
+      if (!ex.shared) this.knownCookie = known;
     }
-    const expires = web ? new Date(this.clock() + (ex.shared ? 12 * 3_600_000 : 30 * 86_400_000)).toISOString() : null;
     this.event(action, { actor_device_id: id, actor_user_id: u.info.id, target_device_id: id, detail: { client: ex.client, ...(ex.shared ? { shared_computer: true } : {}) } });
     return this.json(200, {
       token: web ? null : token, device_id: id, role: u.info.role, shop: clone(this.shop),
       code_block: web ? null : this.block(ex.max), ...this.envelope(),
       user: { id: u.info.id, username: u.info.username, display_name: u.info.display_name, role: u.info.role },
-      known_device: known, expires_at: expires,
+      known_device: known, expires_at: expires, shared: web && ex.shared,
     });
   }
 

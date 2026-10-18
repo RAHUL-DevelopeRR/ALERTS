@@ -1,6 +1,8 @@
 import {
   CUSTOMER_CANONICAL_FIELDS,
   ENTRY_CANONICAL_FIELDS,
+  WEB_SHARED_SESSION_HOURS,
+  type ClientKind,
   type CustomerRow,
   type DeviceInfo,
   type EntryRow,
@@ -8,11 +10,20 @@ import {
 } from '../../../shared/protocol';
 import type { ShopRecord } from '../env';
 
+const WEB_SHARED_SESSION_MS = WEB_SHARED_SESSION_HOURS * 3_600_000;
+
 /** customers / entries as stored in D1 (wire row + shop_id). */
 export type CustomerDb = CustomerRow & { shop_id: string; received_at: string };
 export type EntryDb = EntryRow & { shop_id: string; received_at: string };
 
 export const toShopInfo = (s: ShopRecord): ShopInfo => ({ id: s.id, name: s.name, upi_id: s.upi_id, lang: s.lang });
+
+/**
+ * A web session is "shared" when its row was given the short expiry (WEB_SHARED_SESSION_MS from creation, against
+ * WEB_SESSION_MS otherwise): derived, so no column is needed and v1 rows are unaffected.
+ */
+export const isSharedSession = (d: { client?: ClientKind | null; created_at: string; expires_at?: string | null }): boolean =>
+  d.client === 'web' && typeof d.expires_at === 'string' && Date.parse(d.expires_at) - Date.parse(d.created_at) <= WEB_SHARED_SESSION_MS;
 
 export const toDeviceInfo = (d: DeviceInfo): DeviceInfo => ({
   id: d.id,
@@ -23,6 +34,8 @@ export const toDeviceInfo = (d: DeviceInfo): DeviceInfo => ({
   revoked_at: d.revoked_at ?? null,
   client: d.client ?? null,
   user_id: d.user_id ?? null,
+  expires_at: d.expires_at ?? null,
+  shared: isSharedSession(d),
 });
 
 export const toCustomerRow = (r: CustomerRow): CustomerRow => ({
@@ -72,7 +85,7 @@ export const sameCustomer = (stored: CustomerRow, pushed: Record<string, unknown
 export const sameEntry = (stored: EntryRow, pushed: Record<string, unknown>) =>
   sameFields(stored as unknown as Record<string, unknown>, pushed, ENTRY_CANONICAL_FIELDS);
 
-export const DEVICE_COLUMNS = 'id, name, role, created_at, last_seen_at, revoked_at, client, user_id';
+export const DEVICE_COLUMNS = 'id, name, role, created_at, last_seen_at, revoked_at, client, user_id, expires_at';
 
 export async function listDevices(db: D1Database, shopId: string): Promise<DeviceInfo[]> {
   const { results } = await db

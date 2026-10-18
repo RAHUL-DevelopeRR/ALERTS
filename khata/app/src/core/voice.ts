@@ -213,11 +213,26 @@ export const CUES: Cue[] = [
     'kattinaan', 'kattinan', 'kattunaan', 'kattinaaru', 'kattinaanga', 'kattunanga', 'kattinaa', 'kattinaal',
     'kattittaan', 'kattitaan', 'kattittaaru', 'kattittaanga', 'kattiyaachu', 'kattiyachu', 'kattitta', 'kattirukkaan',
     'kattiyirukkaan', 'kattunaaru',
+    // impersonal perfect "(the amount) has been paid"
+    'கட்டிருச்சு', 'கட்டியிருச்சு', 'kattiruchu', 'kattiyiruchu', 'kattirichu',
   ] },
   // tha/tharu (give to the speaker): customer as subject -> paid -> RECEIVE
   { label: 'thanthaan', type: 'verb', dir: R, forms: [
     'தந்தான்', 'தந்தாங்க', 'தந்தாரு', 'தந்தா', 'தந்துட்டான்', 'thanthaan', 'thandhaan', 'thanthaanga', 'thandhaanga',
     'thanthaaru', 'thandhaaru', 'thanthaa', 'thanthuttaan',
+  ] },
+  // theer (settle / clear): "கணக்கு தீர்த்துட்டாரு" = he cleared the account -> paid -> RECEIVE
+  { label: 'theerthaan', type: 'verb', dir: R, forms: [
+    'தீர்த்தான்', 'தீர்த்தாரு', 'தீர்த்தாங்க', 'தீர்த்தா', 'தீர்த்துட்டான்', 'தீர்த்துட்டாரு', 'தீர்த்துட்டாங்க', 'தீர்த்தாச்சு',
+    'தீர்த்துட்டாச்சு', 'theerthaan', 'theerthan', 'theerthaaru', 'theerthaanga', 'theerthaa', 'theerthutaan', 'theerthuttaan',
+    'theerthutaaru', 'theerthuttaaru', 'theerthuttaanga', 'theerthaachu', 'theerthutaachu', 'theerthittaan',
+  ] },
+  // anuppu (send): "Ramu 500 anuppinaan" = he sent it (UPI, via someone) -> RECEIVE; with a dative on the name
+  // ("Ramukku anuppinaan") someone sent it to him, like kuduthaan
+  { label: 'anuppinaan', type: 'kudu3p', dir: R, forms: [
+    'அனுப்பினான்', 'அனுப்பிட்டான்', 'அனுப்பினாரு', 'அனுப்பிட்டாரு', 'அனுப்பினாங்க', 'அனுப்பிட்டாங்க', 'அனுப்பினா', 'அனுப்பியிருக்கான்',
+    'anuppinaan', 'anuppinan', 'anuppittaan', 'anuppitaan', 'anuppinaaru', 'anuppittaaru', 'anuppinaanga', 'anuppittaanga',
+    'anuppinaa', 'anuppiyirukkaan',
   ] },
   { label: 'settle', type: 'verb', dir: R, forms: ['செட்டில்', 'செட்டில்டு', 'settle', 'settil', 'setil', 'settled', 'settlement'] },
   { label: 'vanthuchu', type: 'verb', dir: R, forms: [
@@ -252,7 +267,7 @@ export const CUES: Cue[] = [
     'வாங்கியிருக்கான்', 'வாங்குனா', 'வாங்குனாரு',
     'vaanginaan', 'vanginan', 'vaangunaan', 'vaanginaa', 'vaanginaal', 'vaangitaan', 'vaangittaan', 'vaangittaa',
     'vaangittaaru', 'vaangittaanga', 'vaangittu', 'vaangikittaan', 'vaangikittaanga', 'vaanginaaru', 'vaanginaanga',
-    'vaangunaanga', 'vaangirukkaan', 'vaangunaa', 'vaangunaaru',
+    'vaangunaanga', 'vaangirukkaan', 'vaangunaa', 'vaangunaaru', 'வாங்கிருச்சு', 'vaangiruchu',
   ] },
   { label: 'eduthaan', type: 'verb', dir: G, forms: [
     'எடுத்தான்', 'எடுத்தாங்க', 'எடுத்தா', 'எடுத்தாரு', 'எடுத்துட்டு', 'எடுத்துட்டான்', 'எடுத்துக்கிட்டான்', 'எடுத்துட்டு போனான்',
@@ -263,6 +278,8 @@ export const CUES: Cue[] = [
     'குடுத்தேன்', 'கொடுத்தேன்', 'குடுத்தோம்', 'கொடுத்தோம்', 'குடுத்திருக்கேன்', 'குடுத்துட்டேன்', 'கொடுத்துட்டோம்', 'குடுத்துருக்கேன்',
     'kuduthen', 'koduthen', 'kuduthom', 'koduthom', 'kuduthirukken', 'kuduthutten', 'kuduthuttom', 'kudutthen',
   ] },
+  // speaker "I/we sent" (the shop sent money to the customer) -> GIVE
+  { label: 'anuppinen', type: 'verb', dir: G, forms: ['அனுப்பினேன்', 'அனுப்பிட்டேன்', 'அனுப்பினோம்', 'anuppinen', 'anuppitten', 'anuppiten', 'anuppinom'] },
   // raw only: 'parru' / பாரு / 'paaru' fold to 'paru' and must stay out of the lexicon (finding 21)
   { label: 'debit', type: 'label', dir: G, raw: true, forms: ['பற்று', 'patru', 'pattru'] },
   { label: 'debit', type: 'label', dir: G, forms: ['டெபிட்'] },
@@ -278,7 +295,7 @@ export const CUES: Cue[] = [
   { label: 'kuduthaachu', type: 'bare', dir: null, forms: [
     'குடுத்தாச்சு', 'கொடுத்தாச்சு', 'குடுத்துட்டாச்சு', 'குடுத்தது', 'கொடுத்தது', 'குடுத்தாச்',
     'kuduthaachu', 'koduthaachu', 'kuduthachu', 'koduthachu', 'kudutthaachu', 'kuduthaach', 'kuduthathu', 'kuduthadhu',
-    'kuduthuttaachu',
+    'kuduthuttaachu', 'குடுத்திருச்சு', 'kuduthiruchu',
   ] },
   { label: 'kudu', type: 'imp', dir: null, forms: ['குடு', 'கொடு', 'குடுங்க', 'கொடுங்க', 'kudu', 'kodu', 'kudunga', 'kodunga', 'kuduthudu'] },
   // ---- light verbs / account
@@ -311,6 +328,13 @@ const CUE_PATTERNS: { re: RegExp; label: string; type: CueType; dir: 'GIVE' | 'R
   { re: /^vank(in|un|it|ikit|iruk|iyiruk)(an|al|ar|aru|anka|ankal|a|anu)$/, label: 'vaanginaan', type: 'verb', dir: G },
   { re: /^vank(itu|ikitu)$/, label: 'vaanginaan', type: 'verb', dir: G },
   { re: /^kat(in|un|it|iy|iruk|iyiruk)(an|al|ar|aru|anka|ankal|a|asu|anu|en|om)$/, label: 'kattinaan', type: 'verb', dir: R },
+  // impersonal perfect: kattiruchu / vaangiruchu / kuduthiruchu ("has been paid / taken / given")
+  { re: /^kat(irusu|iyirusu|irisu|iyirisu)$/, label: 'kattinaan', type: 'verb', dir: R },
+  { re: /^vank(irusu|iyirusu|irisu|iyirisu)$/, label: 'vaanginaan', type: 'verb', dir: G },
+  { re: /^(kutut|kotut)(irusu|iyirusu|irisu|iyirisu)$/, label: 'kuduthaachu', type: 'bare', dir: null },
+  { re: /^tirt(u?t|it)?(an|al|ar|aru|anka|ankal|a|asu)$/, label: 'theerthaan', type: 'verb', dir: R },
+  { re: /^anup(in|un|it|iruk|iyiruk)(an|al|ar|aru|anka|ankal|a)$/, label: 'anuppinaan', type: 'kudu3p', dir: R },
+  { re: /^anup(in|un|it|iruk|iyiruk)(en|om|ten|tom)$/, label: 'anuppinen', type: 'verb', dir: G },
   { re: /^etut(u?t|uk|ukit|it)?(an|al|ar|aru|anka|a|tu|u)$/, label: 'eduthaan', type: 'verb', dir: G },
   { re: /^vant(u|i|a)(su|tu|rusu|tusu)$/, label: 'vanthuchu', type: 'verb', dir: R },
   { re: /^setl/, label: 'settle', type: 'verb', dir: R },
@@ -438,21 +462,24 @@ m(['patu'], 10, 'teen'); m(['pat'], 10, 'teen', BEFORE_MULT);
 m(['patinonu', 'patinonru'], 11, 'teen'); m(['panirantu', 'panentu', 'panrentu'], 12, 'teen'); m(['patimunu', 'patinmunu'], 13, 'teen');
 m(['patinalu'], 14, 'teen'); m(['patinansu', 'patinaintu'], 15, 'teen'); m(['patinaru'], 16, 'teen');
 m(['patinelu'], 17, 'teen'); m(['patinetu'], 18, 'teen'); m(['patonpatu', 'patompatu'], 19, 'teen');
-m(['irupatu', 'irupotu'], 20, 'ten'); m(['irupat', 'irupata'], 20, 'ten', BEFORE_UNIT);
-m(['mupatu'], 30, 'ten'); m(['mupat', 'mupata'], 30, 'ten', BEFORE_UNIT);
-m(['napatu', 'narpatu', 'nalpatu'], 40, 'ten'); m(['napat', 'narpat', 'napata'], 40, 'ten', BEFORE_UNIT);
-m(['aimpatu', 'ampatu', 'ampotu'], 50, 'ten'); m(['aimpat', 'ampat', 'ampata', 'aimpata'], 50, 'ten', BEFORE_UNIT);
-m(['arupatu'], 60, 'ten'); m(['arupat', 'arupata'], 60, 'ten', BEFORE_UNIT);
-m(['elupatu'], 70, 'ten'); m(['elupat', 'elupata'], 70, 'ten', BEFORE_UNIT);
-m(['enpatu', 'empatu'], 80, 'ten'); m(['enpat', 'empat', 'enpata'], 80, 'ten', BEFORE_UNIT);
-m(['tonuru', 'tonnuru'], 90, 'ten'); m(['tonuti', 'tonutri'], 90, 'ten', BEFORE_UNIT);
+// The linking -த்தி form spoken as its own word ("எழுபத்தி அஞ்சு" = 75, "irupathi rendu" = 22) is a plain ten
+// (no `before`): canFollow(ten, unit) then joins the next token. The `before` forms cover the glued "elupatansu".
+m(['irupatu', 'irupotu', 'irupati'], 20, 'ten'); m(['irupat', 'irupata'], 20, 'ten', BEFORE_UNIT);
+m(['mupatu', 'mupati'], 30, 'ten'); m(['mupat', 'mupata'], 30, 'ten', BEFORE_UNIT);
+m(['napatu', 'narpatu', 'nalpatu', 'napati', 'narpati'], 40, 'ten'); m(['napat', 'narpat', 'napata'], 40, 'ten', BEFORE_UNIT);
+m(['aimpatu', 'ampatu', 'ampotu', 'aimpati', 'ampati'], 50, 'ten'); m(['aimpat', 'ampat', 'ampata', 'aimpata'], 50, 'ten', BEFORE_UNIT);
+m(['arupatu', 'arupati'], 60, 'ten'); m(['arupat', 'arupata'], 60, 'ten', BEFORE_UNIT);
+m(['elupatu', 'elupati'], 70, 'ten'); m(['elupat', 'elupata'], 70, 'ten', BEFORE_UNIT);
+m(['enpatu', 'empatu', 'enpati', 'empati'], 80, 'ten'); m(['enpat', 'empat', 'enpata'], 80, 'ten', BEFORE_UNIT);
+m(['tonuru', 'tonnuru', 'tonuti', 'tonutri'], 90, 'ten');
 // நூற்றி transliterates to "noorri" (fold "nuri"); the spoken "nootthi" folds to "nuti"; both continue the number
 const BEFORE_SMALL: NumClass[] = ['ten', 'teen', 'unit'];
 m(['nuru', 'nuti', 'nutri', 'nutru', 'nutu', 'nuri'], 100, 'hundred'); m(['nutr', 'nur'], 100, 'hundred', BEFORE_SMALL);
 m(['irunuru', 'irunuti', 'irunutri', 'irunuri'], 200, 'hundred'); m(['irunur'], 200, 'hundred', BEFORE_SMALL);
 m(['munuru', 'munuti', 'munutri', 'munuri'], 300, 'hundred'); m(['munur'], 300, 'hundred', BEFORE_SMALL);
 m(['nanuru', 'nanuti', 'nalunuru', 'nanuri'], 400, 'hundred'); m(['nanur'], 400, 'hundred', BEFORE_SMALL);
-m(['ainuru', 'ainuti', 'ainutri', 'ansunuru', 'ainuri'], 500, 'hundred'); m(['ainur'], 500, 'hundred', BEFORE_SMALL);
+// "anjooru" / "anjuru" / "anjoothi" (fold "ansuru", "ansuti"): how many Tanglish speakers spell ஐநூறு
+m(['ainuru', 'ainuti', 'ainutri', 'ansunuru', 'ainuri', 'ansuru', 'ansuti', 'ansutri'], 500, 'hundred'); m(['ainur', 'ansur'], 500, 'hundred', BEFORE_SMALL);
 m(['arunuru', 'arunuti', 'arunuri'], 600, 'hundred'); m(['elunuru', 'elunuti', 'elunuri'], 700, 'hundred');
 m(['enuru', 'enuti', 'etunuru', 'enuri'], 800, 'hundred');
 m(['tolayiram', 'tolayiratu', 'tolayirati'], 900, 'hundred');
@@ -598,11 +625,11 @@ function classifyWord(surface: string, raw: string, fold: string): Omit<Tok, 'su
   const atoms = tamilNumberAtoms(fold);
   if (atoms) return { type: 'numword', atoms };
   for (const p of CUE_PATTERNS) if (p.re.test(cfold)) return { type: 'cue', cue: { label: p.label, type: p.type, dir: p.dir } };
-  // glued locative: "creditla", "kanakkula" handled above; "accountla"
+  // glued locative: "creditla", "kanakkula" handled above; "accountla", "gpayla", "போன்பேல"
   const loc = /^(.{4,}?)(la|le|il)$/.exec(raw) ?? /^(.{2,}?)(ல|லே|ல்|யில்)$/.exec(raw);
   if (loc) {
     const base = RAW_CUE.get(loc[1]) ?? FOLD_CUE.get(foldWord(loc[1]));
-    if (base && (base.type === 'label' || base.type === 'account')) return { type: 'cue', cue: { label: base.label, type: base.type, dir: base.dir }, locative: true };
+    if (base && (base.type === 'label' || base.type === 'account' || base.type === 'upi')) return { type: 'cue', cue: { label: base.label, type: base.type, dir: base.dir }, locative: true };
   }
   // item with a dative/locative suffix ("arisikku")
   const itemBase = /^(.{3,}?)(uku|ku|la|il)$/.exec(fold);
@@ -702,11 +729,11 @@ function tokenize(text: string): { norm: string; toks: Tok[] } {
 }
 
 /** Fuzzy direction-cue match for a name-like token (recogniser misspelling). */
-function fuzzyCue(fold: string): Tok['cue'] | null {
+function fuzzyCue(fold: string, maxEdits = Infinity): Tok['cue'] | null {
   // Short words are too close to everything ("kotutu" is one letter from "potutu"); recognisers rarely change
   // the first consonant; and a tie between different meanings is no match.
   if (fold.length < 6) return null;
-  const max = fold.length >= 9 ? 2 : 1;
+  const max = Math.min(maxEdits, fold.length >= 9 ? 2 : 1);
   let bestD = Infinity;
   let hits: Cue[] = [];
   for (const [k, c] of FUZZY_CUE_KEYS) {
@@ -1076,8 +1103,10 @@ function resolveKind(ec: EntryCues, settings: VoiceSettings): KindResult {
   const account = has('account');
   if (has('imp') && (has('noun') || ec.creditLa || account)) return { kind: G, reason: 'verb:kudu+kadan', explicit: false, weak: false, own: true };
   if (has('imp')) return { kind: null, reason: 'verb:kudu-unclear', explicit: false, weak: true, own: true };
+  // A lone account word ("Velu kanakku 800") is only a guess: the verb after it may say the opposite
+  // ("kanakku theerthutaaru" = settled), so without a light verb it stays weak (confidence 'low', the UI asks).
   if (account && (light || ec.cues.length === 1)) {
-    return { kind: G, reason: light ? 'idiom:kanakkula-ezhuthu' : 'idiom:kanakkula', explicit: light, weak: false, own: true };
+    return { kind: G, reason: light ? 'idiom:kanakkula-ezhuthu' : 'idiom:kanakkula', explicit: light, weak: !light, own: true };
   }
   if (ec.creditLa) return { kind: G, reason: 'label:credit-la', explicit: true, weak: false, own: true };
   if (has('noun')) return { kind: G, reason: 'noun:kadan', explicit: false, weak: false, own: true };
@@ -1122,17 +1151,25 @@ function isNameish(t: Tok): boolean {
 function refineTokens(toks: Tok[], idx: IndexedCustomer[]): void {
   const firstNames = new Set<string>();
   for (const ic of idx) for (const f of ic.firstWords) firstNames.add(f);
+  // an amount has been spoken since the last separator: what follows is more likely a verb than a name
+  let numberSeen = false;
   for (const t of toks) {
+    if (t.type === 'digits') numberSeen = true;
+    else if (t.type === 'sep') numberSeen = false;
     if (!t.fold) continue;
+    if (t.type === 'numword') numberSeen = true;
     const nk = nameKey(t.surface);
     if ((t.type === 'numword' || t.type === 'item' || (t.type === 'cue' && (t.cue!.type === 'noun' || t.cue!.type === 'baaki' || t.cue!.type === 'light'))) && firstNames.has(nk)) {
       t.alsoName = true;
     }
     if (t.type !== 'name') continue;
-    // a good customer match keeps it a name; otherwise try a misspelt cue
-    const exactish = idx.some((ic) => ic.forms.some((f) => f.split(' ').some((w) => sim(w, nk) >= 0.8)));
-    if (!exactish) {
-      const fc = fuzzyCue(t.fold.replace(/c/g, 's'));
+    // A good customer match keeps it a name; otherwise try a misspelt cue. After the amount, a verb the recogniser
+    // contracted ("katnan" for kattinaan) can still sit within 0.8 of a customer (கண்ணன் = "kanan"): a one-edit
+    // verb then wins unless the name fits at 0.9 or better.
+    let nameSim = 0;
+    for (const ic of idx) for (const f of ic.forms) for (const w of f.split(' ')) nameSim = Math.max(nameSim, sim(w, nk));
+    if (nameSim < 0.8 || (numberSeen && nameSim < 0.9)) {
+      const fc = fuzzyCue(t.fold.replace(/c/g, 's'), nameSim >= 0.8 ? 1 : Infinity);
       if (fc) { t.type = 'cue'; t.cue = fc; continue; }
     }
     const cands = suffixCandidates(t);
@@ -1159,9 +1196,12 @@ const PARTICIPLES: { re: RegExp; p3: Omit<Cue, 'forms'>; p1: Omit<Cue, 'forms'> 
   { re: /^(vanki|vankit|vankitu)$/, p3: { label: 'vaanginaan', type: 'verb', dir: G }, p1: { label: 'vaanginen', type: 'verb', dir: R } },
   { re: /^(kati|katit|katitu)$/, p3: { label: 'kattinaan', type: 'verb', dir: R }, p1: null },
   { re: /^(etutu|etututu)$/, p3: { label: 'eduthaan', type: 'verb', dir: G }, p1: null },
+  // "thanthuttu poittaan" (handed it over and left) -> paid; "thanthu vitten" -> I gave
+  { re: /^tant(u|utu|itu)$/, p3: { label: 'thanthaan', type: 'verb', dir: R }, p1: { label: 'thanthen', type: 'verb', dir: G } },
 ];
-const AUX3 = /^(vit|iruk|poyit|poit|pon|ponn)(an|al|ar|aru|anka|ankal|a)$/;
-const AUX1 = /^(vit|iruk)(en|om|ken|kom)$/;
+/** vittaan / irukkaan / poittaan / ponaan, and the "finish" auxiliary mudichaan / mudichuttaan ("kattி mudichuttaaru"). */
+const AUX3 = /^(vit|iruk|poyit|poit|pon|ponn|mutis|mutisut|mutisit)(an|al|ar|aru|anka|ankal|a)$/;
+const AUX1 = /^(vit|iruk|mutis|mutisut)(en|om|ken|kom)$/;
 
 function resolveParticiples(toks: Tok[]): void {
   for (let x = 0; x + 1 < toks.length; x++) {
@@ -1262,6 +1302,8 @@ function buildEntry(
   let query = false;
   const nameIdx: number[] = [];
   const itemIdx: number[] = [];
+  /** token index of each entry in ec.cues */
+  let cueIdx: number[] = [];
   const noteIdx = new Set<number>();
   let codeMatch: CustomerMatch[] | null = null;
   for (const cr of pick.codeRuns) {
@@ -1284,6 +1326,7 @@ function buildEntry(
         if (c.type === 'baaki' && toks.slice(e.from, e.to).some((y) => y.type === 'query')) query = true;
         if (c.label === 'credit' && (t.locative || ['la', 'le', 'il', 'ல', 'லே'].includes(toks[x + 1]?.raw ?? '') || toks[x - 1]?.raw === 'on')) ec.creditLa = true;
         ec.cues.push(c);
+        cueIdx.push(x);
         break;
       }
       case 'pron1': ec.pron1 = true; break;
@@ -1308,6 +1351,20 @@ function buildEntry(
         break;
       default:
         break;
+    }
+  }
+  // verb correction: "vaanginaan illa kattinaan" -> a NEG between two cues of opposite direction drops the cues
+  // before it (mirror of the amount rule); the corrected direction never reaches 'high'
+  let corrected = false;
+  for (let k = 1; k < ec.cues.length; k++) {
+    const a = ec.cues[k - 1];
+    const b = ec.cues[k];
+    if (!a.dir || !b.dir || a.dir === b.dir) continue;
+    if (toks.slice(cueIdx[k - 1] + 1, cueIdx[k]).some((t) => t.type === 'neg')) {
+      ec.cues = ec.cues.slice(k);
+      cueIdx = cueIdx.slice(k);
+      corrected = true;
+      k = 0;
     }
   }
   // name correction: "Sita illa Seetha" -> keep the part after the last NEG that sits between name tokens
@@ -1353,6 +1410,7 @@ function buildEntry(
   // English "gave Ramu 100" (imperative/speaker) is handled by "to"/"I"; "gave to Ramu" sets giveTo.
   const name_text = nameSpan.length ? nameSurface(nameSpan) : null;
   const kr: KindResult = resolveKind(ec, settings);
+  if (corrected && kr.kind) { kr.explicit = false; kr.reason = `corrected:${kr.reason}`; }
   // note: item and quantity words in reading order, as heard
   const noteToks = [...noteIdx].sort((a, b) => a - b).filter((x) => toks[x] && toks[x].type !== 'sep');
   const note = noteToks.length ? noteToks.map((x) => toks[x].surface).join(' ') : null;

@@ -129,7 +129,7 @@ export interface GoogleIdentity {
   nonce: string | null;
 }
 
-export type GoogleVerifyError = 'malformed' | 'alg' | 'kid' | 'signature' | 'iss' | 'aud' | 'expired' | 'iat' | 'email';
+export type GoogleVerifyError = 'malformed' | 'alg' | 'kid' | 'signature' | 'iss' | 'aud' | 'expired' | 'iat' | 'email' | 'hd';
 
 const dec = new TextDecoder();
 
@@ -144,11 +144,16 @@ function decodeJson(part: string | undefined): Record<string, unknown> | null {
   }
 }
 
-/** Verifies a Google ID token. `audiences` = accepted OAuth client ids; `nowMs` is injectable for tests. */
+/**
+ * Verifies a Google ID token. `audiences` = accepted OAuth client ids; `nowMs` is injectable for tests. `hd` is the
+ * Workspace domain from GOOGLE_HD (if any): an email at that domain must come from that Workspace (`hd` claim), so a
+ * consumer account that somehow carries an address at the domain cannot link.
+ */
 export async function verifyGoogleIdToken(
   token: string,
   audiences: readonly string[],
   nowMs = Date.now(),
+  hd?: string,
 ): Promise<{ ok: true; identity: GoogleIdentity } | { ok: false; error: GoogleVerifyError }> {
   if (typeof token !== 'string' || token.length > 8192) return { ok: false, error: 'malformed' };
   const parts = token.split('.');
@@ -181,11 +186,16 @@ export async function verifyGoogleIdToken(
   if (typeof payload.sub !== 'string' || payload.sub.length < 1 || payload.sub.length > 255) {
     return { ok: false, error: 'malformed' };
   }
+  const email = payload.email.trim().toLowerCase();
+  const domain = (hd ?? '').trim().toLowerCase();
+  if (domain && email.endsWith(`@${domain}`) && (typeof payload.hd !== 'string' || payload.hd.toLowerCase() !== domain)) {
+    return { ok: false, error: 'hd' };
+  }
   return {
     ok: true,
     identity: {
       sub: payload.sub,
-      email: payload.email.trim().toLowerCase(),
+      email,
       name: typeof payload.name === 'string' ? payload.name.slice(0, 60) : null,
       nonce: typeof payload.nonce === 'string' && payload.nonce.length <= 200 ? payload.nonce : null,
     },

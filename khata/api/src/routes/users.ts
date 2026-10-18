@@ -144,7 +144,8 @@ usersRoutes.post('/users', auth, ownerOnly, noWeb, async (c) => {
  * Owner edits a user (never from the web; step-up when role, google_email or disabled is touched). The UPDATE itself
  * carries the last-owner guard, so two owners demoting each other at once can never leave the shop without an
  * enabled owner user. Disabling revokes that user's devices and deletes the unused codes they issued; a role change
- * is applied to the user's live devices, in the same batch.
+ * is applied to the user's live devices and, when the user stops being an owner, ends their web sessions (the web
+ * is owner-only), all in the same batch.
  */
 usersRoutes.put('/users/:id', auth, ownerOnly, noWeb, async (c) => {
   const body = await readJson(c);
@@ -201,6 +202,10 @@ usersRoutes.put('/users/:id', auth, ownerOnly, noWeb, async (c) => {
   if (role !== target.role) changed.role = role;
   if (emailChanged || emailSetAt !== target.google_email_set_at) changed.google_email = googleEmail;
   if (disabledAt !== target.disabled_at) changed.disabled = disabledAt !== null;
+  // The web is owner-only: a user who stops being an owner loses their browser sessions right away (a fresh staff
+  // web login would be refused with web_owner_only, so an existing one must not outlive the demotion).
+  const endsWeb = role !== 'owner' && target.role === 'owner';
+  if (endsWeb) changed.web_sessions_ended = true;
   const stmts = [
     db
       .prepare(
@@ -219,6 +224,14 @@ usersRoutes.put('/users/:id', auth, ownerOnly, noWeb, async (c) => {
          WHERE user_id = ?1 AND revoked_at IS NULL AND role <> (SELECT role FROM users WHERE id = ?1)`,
       )
       .bind(id),
+    // Web sessions of a user who is no longer an owner end here (no-op when the guard refused the update).
+    db
+      .prepare(
+        `UPDATE devices SET revoked_at = ?2
+         WHERE user_id = ?1 AND revoked_at IS NULL AND client = 'web'
+           AND (SELECT role FROM users WHERE id = ?1) <> 'owner'`,
+      )
+      .bind(id, nowIso),
     db
       .prepare(
         `DELETE FROM pair_codes WHERE used_at IS NULL

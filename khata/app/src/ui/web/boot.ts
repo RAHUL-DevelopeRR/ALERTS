@@ -1,29 +1,37 @@
 /**
  * Web app boot (called by src/main.ts when __WEB_APP__): the browser is never the ledger of record.
  *
- *   open the persisted sql.js database -> signed in before?  yes: sync (401 -> session ended: wipe, login)
- *                                                            no: GET /me (cookie survived?) -> adopt, else login gate
+ *   a persisted copy exists (IndexedDB)?  yes: open it -> sync (401 -> session ended: wipe, login gate)
+ *                                         no: in-memory database first, then GET /me (cookie survived?)
+ *                                               -> shared session: stay in memory, adopt it (never persisted)
+ *                                               -> normal session: switch to the persisted database, adopt it
+ *                                               -> no session: login gate
  *   login gate: user id + password (owner only) or Google; "shared computer" -> in-memory database + in-memory
- *   platform storage (nothing is left on the computer), shared_computer sent to the server (12 h session).
- *   After login: full pull (the first syncNow), then the normal UI.
+ *   platform storage (nothing is left on the computer), shared_computer sent to the server (12 h session); otherwise
+ *   the persisted database is opened only now. After login: full pull (the first syncNow), then the normal UI.
+ *
+ * The order matters: the persisted sql.js database is never opened until the session is known NOT to be a shared
+ * one (GET /me device.shared, LoginResponse.shared), so a reload on a shared computer rebuilds the ledger in memory
+ * again. When the server does not say (older server), the session is treated as shared: in memory is the safe side.
  *
  * Also installs: the 401 watcher (session ended -> show the unsynced count, wipe this browser's copy, back to the
  * login page), and the "+ Customer" guard (the web creates customers only online and in sync, with a code block
  * requested on demand: a browser never burns 50 codes per login).
  */
+import type { MeResponse } from '../../../../shared/protocol';
 import { openRepo } from '../../data/index';
 import type { NewCustomerInput, Repo } from '../../data/types';
 import type { Platform } from '../../platform/types';
 import { createSyncEngine } from '../../sync/index';
 import { SyncError, type LoginProgress } from '../../sync/types';
-import { getLang, setLang, t } from '../../i18n';
+import { getLang, onLangChange, setLang, t } from '../../i18n';
 import { app, refreshSettings } from '../app';
 import { h } from '../components/dom';
 import { alertDialog } from '../components/overlay';
 import { logo, showGate } from '../gate';
 import { loginGate } from './login-gate';
 import { endWebSession } from './session';
-import { wipeWebStorage } from './storage';
+import { hasWebDatabase, rememberLang, rememberedLang, wipeWebStorage } from './storage';
 import { injectWebStyles } from './styles';
 
 /** Platform wrapper for a shared computer: private files and secrets stay in memory (nothing persisted). */
@@ -111,6 +119,11 @@ async function sessionEnded(): Promise<void> {
   await endWebSession({ logout: false });
 }
 
+/** True when the server says this cookie session is a shared-computer one; unknown (older server) counts as shared. */
+export function isSharedSession(me: MeResponse): boolean {
+  return me.device.shared !== false;
+}
+
 /**
  * Runs until the browser is signed in: app.repo / app.db / app.sync are then set and the first sync has run.
  * Throws only for a database failure (main.ts shows the boot error).
@@ -120,33 +133,86 @@ export async function webPrelude(): Promise<void> {
   const origin = window.location.origin;
   const basePlatform = app.platform;
   showGate('boot', logo(), h('div', 'spinner'), h('p', { text: t('web.loading') }));
-  await openWebRepo(false);
+  const startLang = rememberedLang();
+  if (startLang) setLang(startLang);
+  onLangChange(rememberLang);
+
+  let mode: 'none' | 'memory' | 'persisted' = 'none';
+  const closeCurrent = async (): Promise<void> => {
+    if (mode === 'none') return;
+    try {
+      app.sync.stop();
+    } catch {
+      /* no engine yet */
+    }
+    await app.db.close().catch(() => undefined);
+    mode = 'none';
+  };
+  /** In-memory database + in-memory platform storage; anything persisted by an earlier visit is removed. */
+  const goMemory = async (): Promise<void> => {
+    const lang = getLang();
+    await closeCurrent();
+    await wipeWebStorage();
+    app.platform = memoryPlatform(basePlatform);
+    await openWebRepo(true);
+    await app.repo.saveSettings({ lang });
+    setLang(lang);
+    mode = 'memory';
+  };
+  /** The persisted database (IndexedDB), for a session the owner chose to keep on this computer. */
+  const goPersisted = async (): Promise<void> => {
+    const lang = getLang();
+    await closeCurrent();
+    app.platform = basePlatform;
+    await openWebRepo(false);
+    await app.repo.saveSettings({ lang });
+    setLang(lang);
+    mode = 'persisted';
+  };
 
   let signedIn = false;
   let notice: string | null = null;
-  if (app.settings.paired) {
-    // A local copy from an earlier sign-in: the first sync validates the cookie (401 -> session ended).
-    const st = await app.sync.syncNow();
-    if (st.phase === 'revoked') {
-      // Session expired or revoked: drop this browser's copy, keep only the language choice for the login page.
-      const n = app.sync.lastRevokedPending;
-      const lang = getLang();
-      await app.db.close().catch(() => undefined);
-      await wipeWebStorage();
-      await openWebRepo(false);
-      await app.repo.saveSettings({ lang });
-      setLang(lang);
-      notice = n > 0 ? `${t('web.sessionEnded')} ${t('web.sessionEndedUnsynced', { n })}` : t('web.sessionEnded');
+  if (await hasWebDatabase()) {
+    // A local copy from an earlier (non-shared) sign-in: the first sync validates the cookie (401 -> session ended).
+    app.platform = basePlatform;
+    await openWebRepo(false);
+    mode = 'persisted';
+    if (app.settings.paired) {
+      const st = await app.sync.syncNow();
+      if (st.phase === 'revoked') {
+        // Session expired or revoked: drop this browser's copy, keep only the language choice for the login page.
+        const n = app.sync.lastRevokedPending;
+        notice = n > 0 ? `${t('web.sessionEnded')} ${t('web.sessionEndedUnsynced', { n })}` : t('web.sessionEnded');
+        await goMemory();
+      } else {
+        signedIn = true;
+      }
     } else {
-      signedIn = true;
+      // An empty database without a sign-in (older build): nothing to keep.
+      await goMemory();
     }
   } else {
-    // No local copy (first visit, or site data cleared): a surviving session cookie rebuilds it from GET /me.
+    await goMemory();
+  }
+
+  if (!signedIn) {
+    // No local copy (first visit, shared computer reloaded, or site data cleared): ask the server whether the
+    // cookie still names a session, and only then decide where that session may live.
+    let me: MeResponse | null = null;
     try {
-      signedIn = await app.sync.resumeWebSession(origin);
+      me = await app.sync.webSession();
     } catch (e) {
-      console.warn('[web] resume failed', e);
-      signedIn = false;
+      console.warn('[web] session check failed', e);
+    }
+    if (me) {
+      if (!isSharedSession(me)) await goPersisted();
+      try {
+        signedIn = await app.sync.resumeWebSession(origin, me);
+      } catch (e) {
+        console.warn('[web] resume failed', e);
+        signedIn = false;
+      }
+      if (!signedIn && mode === 'persisted') await goMemory();
     }
   }
 
@@ -168,17 +234,24 @@ export async function webPrelude(): Promise<void> {
         }
       },
       signIn: async (how, shared, onProgress: (p: LoginProgress) => void) => {
-        if (shared && !app.sync.getAccount()) {
-          // Shared computer: nothing persists. Close the persisted (empty) database, drop it, go in-memory.
-          app.sync.stop();
-          await app.db.close().catch(() => undefined);
-          await wipeWebStorage();
-          app.platform = memoryPlatform(basePlatform);
-          await openWebRepo(true);
-        }
+        // The database is chosen by the checkbox: shared -> stay in memory (nothing persists); otherwise the
+        // persisted one is opened now, for the first time in this visit.
+        if (shared && mode !== 'memory') await goMemory();
+        if (!shared && mode !== 'persisted') await goPersisted();
         const name = await app.platform.deviceModel().catch(() => 'Browser');
-        if (how.kind === 'password') await app.sync.login(origin, how.username, how.password, name, { shared, onProgress });
-        else await app.sync.googleLogin(origin, how.idToken, name, { shared });
+        try {
+          if (how.kind === 'password') await app.sync.login(origin, how.username, how.password, name, { shared, onProgress });
+          else await app.sync.googleLogin(origin, how.idToken, name, { shared });
+        } catch (e) {
+          // A failed sign-in leaves nothing behind: back to the in-memory database until the next attempt.
+          if (mode === 'persisted') await goMemory();
+          throw e;
+        }
+        if (app.sync.getAccount()?.shared && mode !== 'memory') {
+          // Belt and braces: the server says shared (it decides the session length) -> never keep a copy here.
+          await goMemory();
+          await app.sync.resumeWebSession(origin);
+        }
         await app.repo.setMeta('onboarded', new Date().toISOString());
         await refreshSettings();
       },

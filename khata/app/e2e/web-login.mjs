@@ -313,6 +313,7 @@ async function main() {
     await page.locator('.screen[data-route="customer"]').waitFor();
     check((await toast()).includes('₹50'), 'toast shows the new balance ₹50');
     check((await text('[data-testid="balance"]')) === '₹50', 'balance ₹50 after the credit');
+    check((await page.locator('[data-testid="badge-saving"]').count()) >= 1 || !(await page.locator('.screen[data-route="customer"]').innerText()).includes('Not on server'), 'a just-saved row on the web says "Saving…", not "Not on server"');
     await shot('customer-after-credit');
     await syncNow();
     const exp1 = must(await api(worker.url, 'GET', '/export', { token: boot.phone.token }), 'export');
@@ -378,6 +379,13 @@ async function main() {
     await shot('signed-out');
 
     console.log('shared computer mode');
+    check((await text('[data-testid="web-shared-help"]')).includes('copy of the ledger stays'), 'login page states the default (a copy stays in this browser)');
+    const toggleColor = await page.locator('[data-testid="web-pw-toggle"]').evaluate((el) => getComputedStyle(el).color);
+    check((await page.locator('[data-testid="web-pw-toggle"]').isVisible()) && toggleColor !== 'rgb(255, 255, 255)', `password Show/Hide toggle visible on the web login (${toggleColor})`);
+    await tid('web-shared').check();
+    check((await text('[data-testid="web-shared-help"]')).includes('nothing will be kept'), 'ticking the box explains the shared mode');
+    await tid('web-shared').uncheck();
+    const knownBefore = (await context.cookies()).find((c) => c.name === 'kk_known')?.value ?? null; // from the earlier normal sign-in
     await signIn(OWNER.username, OWNER.password, { shared: true });
     await home();
     await page.waitForFunction(() => document.querySelectorAll('[data-testid="cust-row"]').length >= 3, null, { timeout: 15_000 });
@@ -395,8 +403,23 @@ async function main() {
     await page.locator('.screen[data-route="settings"]').waitFor();
     await page.waitForFunction(() => /ravi/.test(document.querySelector('[data-testid="account-line"]')?.textContent ?? ''));
     check((await text('#sec-sync')).includes('Session ends'), 'settings shows when the shared session ends');
+    check((await text('#sec-sync')).includes('Shared computer'), 'settings says this is a shared-computer session');
     await page.locator('#sec-sync').scrollIntoViewIfNeeded();
     await shot('shared-settings');
+
+    console.log('shared computer mode survives a reload in memory only (the 12 h cookie is alive, IndexedDB stays empty)');
+    const knownAfter = (await context.cookies()).find((c) => c.name === 'kk_known')?.value ?? null;
+    check(knownAfter === knownBefore, 'shared mode: the login set no new kk_known cookie on this computer');
+    await page.reload();
+    await home();
+    await page.waitForFunction(() => document.querySelectorAll('[data-testid="cust-row"]').length >= 3, null, { timeout: 15_000 });
+    const st4b = await storageState();
+    check(!st4b.idb.includes('kadan-kanakku-sqljs'), `shared mode after reload: still no IndexedDB database (${st4b.idb.join(',')})`);
+    check(!(await ledgerContains('Kamala')), 'shared mode after reload: no ledger copy on this computer');
+    check(!st4b.ls.includes('preview-file:account.json'), 'shared mode after reload: no account file in localStorage');
+    const exp4b = must(await api(worker.url, 'GET', '/export', { token: boot.phone.token }), 'export');
+    check(exp4b.devices.filter((d) => d.client === 'web' && !d.revoked_at).length === 1, 'the same shared session continues (one live web device)');
+    await shot('shared-after-reload');
     // The browser closes: a new context has no session cookie -> login page, and nothing was left behind.
     await context.close();
     context = await makeContext();

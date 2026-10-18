@@ -41,6 +41,7 @@ export interface DeviceRecord {
   user_id: string | null;
   client: ClientKind | null;
   stepup_until: string | null;
+  expires_at: string | null;
 }
 
 export interface ShopRecord {

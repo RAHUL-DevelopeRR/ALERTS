@@ -15,6 +15,11 @@
  *   - 'partialResults' {matches?, accumulatedText?}: live partials (onPartialResults, usually one match) AND the
  *     final result (onResults: up to maxResults matches) use the same event; the final one comes right before
  *     'stopped'. No sessionId on this event.
+ *   - buildRecognizerIntent() also sets "android.speech.extra.DICTATION_MODE" = partialResults (true here), the
+ *     Gboard voice-typing mode in which Google may keep the session open across pauses instead of ending it after
+ *     the usual ~1 s of end-of-speech silence. This adapter therefore ends the session itself once the transcript
+ *     has stopped changing for PARTIAL_SETTLE_MS (see onPartialEvent); stopListening() then yields onResults or
+ *     ERROR_CLIENT and the post-stop path resolves with what was heard.
  *   - 'error' {code, message, sessionId}: getErrorCode() names (NO_MATCH, SPEECH_TIMEOUT, NETWORK, ...), followed by
  *     'stopped' with reason 'silence' (NO_MATCH/SPEECH_TIMEOUT) or 'error'.
  * - stop(): posts stopListening() on the main thread; Google normally delivers onResults, and the plugin forces
@@ -41,6 +46,12 @@ const SILENCE_CODES = new Set(['NO_MATCH', 'SPEECH_TIMEOUT']);
 const IDLE_WAIT_MS = 2500;
 /** JS-side fallback after stop() in case the plugin never emits 'stopped'. */
 const STOP_FALLBACK_MS = 1500;
+/**
+ * Stability cut-off: stop() this long after the partial transcript last changed. Long enough for a mid-sentence
+ * pause in Tamil ("ராமு ... நூறு ... குடுத்தாச்சு"), short enough that the prefilled entry appears a couple of
+ * seconds after the utterance instead of at the UI's maxMs cap when Google does not end a DICTATION_MODE session.
+ */
+export const PARTIAL_SETTLE_MS = 2500;
 
 interface Session {
   /** Plugin sessionId, known from the 'startingListening' event. */
@@ -59,6 +70,9 @@ interface Session {
   resolve: (alts: string[]) => void;
   reject: (e: Error) => void;
   timers: Array<ReturnType<typeof setTimeout>>;
+  /** Last partial transcript seen, to (re)arm the settle timer only when it changes. */
+  lastText: string;
+  settleTimer: ReturnType<typeof setTimeout> | null;
 }
 
 function errInfo(e: unknown): { code: string; message: string } {
@@ -108,6 +122,8 @@ export function createNativeSpeech(): Speech {
     s.settled = true;
     for (const t of s.timers) clearTimeout(t);
     s.timers = [];
+    if (s.settleTimer !== null) clearTimeout(s.settleTimer);
+    s.settleTimer = null;
     if (current === s) current = null;
     if ('error' in outcome) s.reject(outcome.error);
     else s.resolve(outcome.alts);
@@ -120,8 +136,18 @@ export function createNativeSpeech(): Speech {
     if (!s || s.settled || s.id === null) return;
     const matches = Array.isArray(ev.matches) ? ev.matches : [];
     if (matches.length > 0) s.matches = matches.slice();
-    const text = (typeof ev.accumulatedText === 'string' && ev.accumulatedText) || matches[0] || '';
-    if (text.trim()) safeCall(s.onPartial, text.trim());
+    const text = ((typeof ev.accumulatedText === 'string' && ev.accumulatedText) || matches[0] || '').trim();
+    if (!text) return;
+    safeCall(s.onPartial, text);
+    // DICTATION_MODE: Google may not end the session by itself, so end it once the transcript stops changing.
+    // Not after our own stop(): the final onResults list arrives through this same event.
+    if (s.stopping || text === s.lastText) return;
+    s.lastText = text;
+    if (s.settleTimer !== null) clearTimeout(s.settleTimer);
+    s.settleTimer = setTimeout(() => {
+      s.settleTimer = null;
+      if (current === s && !s.settled && !s.stopping) void stop();
+    }, PARTIAL_SETTLE_MS);
   };
 
   const onStateEvent = (ev: SpeechRecognitionListeningEvent) => {
@@ -216,6 +242,8 @@ export function createNativeSpeech(): Speech {
         resolve,
         reject,
         timers: [],
+        lastText: '',
+        settleTimer: null,
       };
       current = s;
       nativeBusy = true;
@@ -229,8 +257,11 @@ export function createNativeSpeech(): Speech {
         if (!s.settled) s.timers.push(setTimeout(() => void stop(), listenTimeout(opts.maxMs)));
       } catch (e) {
         const err = mapStartError(e);
-        // Unavailable / no permission: the plugin returned before leaving IDLE. Otherwise wait for its 'stopped'.
-        if (err.message === 'SPEECH_UNAVAILABLE' || err.message === 'SPEECH_PERMISSION') markIdle();
+        // The plugin emits 'startingListening' (which sets s.id) before any path that will later emit 'stopped'.
+        // A rejection without it never left IDLE natively (unavailable, no permission, a bridge-level error such as
+        // "does not respond to method call"), so the adapter is idle again at once. 'already running' means an
+        // earlier native session is still live; its own 'stopped' event clears the flag.
+        if (s.id === null && err.message !== 'SPEECH_ERROR:BUSY') markIdle();
         settle(s, { error: err });
       }
       return done;
