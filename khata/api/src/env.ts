@@ -1,4 +1,7 @@
-import type { Lang, Role } from '../../shared/protocol';
+import type { ClientKind, Lang, Role } from '../../shared/protocol';
+
+/** Server build version reported by GET /v1/config. */
+export const SERVER_VERSION = '2.0.0';
 
 /** Worker bindings: D1, plain vars from wrangler.jsonc and secrets (PEPPER, SETUP_KEY). */
 export interface Bindings {
@@ -11,6 +14,14 @@ export interface Bindings {
   PAIR_THROTTLE_AFTER?: string;
   /** Workers Rate Limiting binding: per-client-IP first layer in front of /pair. Optional. */
   PAIR_LIMITER?: RateLimit;
+  /** Per-client-IP first layer in front of /auth/prelogin, /auth/login and /auth/google. Optional. */
+  AUTH_LIMITER?: RateLimit;
+  /** Wrong password logins per UTC day before the shop-wide throttle (default 100). */
+  AUTH_THROTTLE_AFTER?: string;
+  /** Comma-separated Google OAuth client ids accepted as `aud`; the FIRST is the web client id. Empty = Google off. */
+  GOOGLE_CLIENT_IDS?: string;
+  /** Workers static assets (the web app in ../app/dist-web). Only /v1/* reaches the Worker. */
+  ASSETS?: Fetcher;
 }
 
 /** The authenticated device, as returned by the auth UPDATE ... RETURNING. */
@@ -23,6 +34,8 @@ export interface DeviceRecord {
   last_seen_at: string | null;
   revoked_at: string | null;
   requests_today: number;
+  user_id: string | null;
+  client: ClientKind | null;
 }
 
 export interface ShopRecord {

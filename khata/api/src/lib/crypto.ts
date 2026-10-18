@@ -7,10 +7,7 @@ export async function sha256Bytes(s: string): Promise<Uint8Array> {
 }
 
 export async function sha256Hex(s: string): Promise<string> {
-  const b = await sha256Bytes(s);
-  let out = '';
-  for (const x of b) out += x.toString(16).padStart(2, '0');
-  return out;
+  return toHex(await sha256Bytes(s));
 }
 
 /** hex sha256(secret || PEPPER): how tokens and pairing codes are stored. */
@@ -24,10 +21,48 @@ export async function constantTimeEqual(a: string, b: string): Promise<boolean> 
   return diff === 0;
 }
 
-function base64url(bytes: Uint8Array): string {
+export function base64url(bytes: Uint8Array): string {
   let bin = '';
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Strict base64url (no padding) decode: null unless `s` is the canonical encoding of exactly `len` bytes
+ * (when `len` is given), so one value has exactly one accepted spelling.
+ */
+export function fromBase64url(s: unknown, len?: number): Uint8Array | null {
+  if (typeof s !== 'string' || s.length > 8192 || !/^[A-Za-z0-9_-]*$/.test(s) || s.length % 4 === 1) return null;
+  let bin: string;
+  try {
+    bin = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+  } catch {
+    return null;
+  }
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  if (len !== undefined && out.length !== len) return null;
+  if (base64url(out) !== s) return null;
+  return out;
+}
+
+export function toHex(b: Uint8Array): string {
+  let out = '';
+  for (const x of b) out += x.toString(16).padStart(2, '0');
+  return out;
+}
+
+const hmacKeys = new Map<string, Promise<CryptoKey>>();
+
+/** HMAC-SHA256(key, msg). The imported key is cached per isolate (the pepper never changes at runtime). */
+export async function hmacSha256(key: string, msg: Uint8Array | string): Promise<Uint8Array> {
+  let k = hmacKeys.get(key);
+  if (!k) {
+    k = crypto.subtle.importKey('raw', enc.encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    hmacKeys.set(key, k);
+  }
+  const data = typeof msg === 'string' ? enc.encode(msg) : msg;
+  return new Uint8Array(await crypto.subtle.sign('HMAC', await k, data));
 }
 
 /** 256-bit device token, base64url (43 chars). */

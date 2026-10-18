@@ -7,16 +7,16 @@ import {
   type SetupResponse,
 } from '../../../shared/protocol';
 import { intVar, type AppEnv, type ShopRecord } from '../env';
-import { blockFromResult, codeBlockStatements, mintPairCode } from '../lib/codes';
+import { blockFromResult, mintPairCode } from '../lib/codes';
+import { newDeviceTail, shopOfDevice } from '../lib/session';
 import { constantTimeEqual, normaliseCode, pepperHash, randomToken } from '../lib/crypto';
 import { badRequest, fail, isObj, readJson } from '../lib/http';
 import { toShopInfo } from '../lib/rows';
-import { addMs, iso, utcDay } from '../lib/time';
+import { iso } from '../lib/time';
+import { giveBackDailyAttempt, reserveDailyAttempt } from '../lib/throttle';
 import { optionalCode } from '../lib/util';
 
 export const publicRoutes = new Hono<AppEnv>();
-
-const THROTTLE_WINDOW_MS = 30_000;
 
 publicRoutes.get('/health', async (c) => {
   await c.env.DB.prepare('SELECT 1').first();
@@ -67,26 +67,9 @@ publicRoutes.post('/setup', async (c) => {
 });
 
 /**
- * Pair throttle (8-digit codes only): a global per-UTC-day counter of attempts. Reserving an attempt is ONE atomic
- * statement, so a burst cannot slip past the threshold: below PAIR_THROTTLE_AFTER every attempt is allowed; past it
- * only the request that moves next_allowed_at (one per 30 s) is. A successful pairing gives its attempt back, so the
- * count is the day's failures. Never a lockout of recovery codes, never burns codes.
+ * Pair throttle (8-digit codes only): the global per-UTC-day counter in pair_failures (see lib/throttle.ts). Never a
+ * lockout of recovery codes, never burns codes.
  */
-async function reservePairAttempt(db: D1Database, now: Date, threshold: number): Promise<boolean> {
-  const next = iso(addMs(now, THROTTLE_WINDOW_MS));
-  const row = await db
-    .prepare(
-      `INSERT INTO pair_failures (day, count, next_allowed_at) VALUES (?1, 1, CASE WHEN 1 >= ?2 THEN ?3 END)
-       ON CONFLICT(day) DO UPDATE SET count = count + 1,
-         next_allowed_at = CASE WHEN count + 1 >= ?2 THEN ?3 ELSE next_allowed_at END
-       WHERE count < ?2 OR next_allowed_at IS NULL OR next_allowed_at <= ?4
-       RETURNING count`,
-    )
-    .bind(utcDay(now), threshold, next, iso(now))
-    .first();
-  return row !== null;
-}
-
 /** Recovery codes: 16 characters of the Crockford-style alphabet (80 bits, no throttle needed). */
 const RECOVERY_RE = /^[0-9A-Z]{16}$/;
 const PAIR_RE = /^[0-9]{8}$/;
@@ -121,7 +104,7 @@ publicRoutes.post('/pair', async (c) => {
   // A code of neither shape can never match: refused without touching the throttle (it is not a guess).
   if (!isRecovery && !PAIR_RE.test(code)) return fail(c, 403, 'invalid_code');
   // 80-bit recovery codes are excluded from every throttle side effect (the owner's way back in can't be blocked).
-  if (!isRecovery && !(await reservePairAttempt(db, now, threshold))) return fail(c, 429, 'throttled');
+  if (!isRecovery && !(await reserveDailyAttempt(db, 'pair_failures', now, threshold))) return fail(c, 429, 'throttled');
 
   const codeHash = await pepperHash(code, pepper);
   const token = randomToken();
@@ -146,50 +129,13 @@ publicRoutes.post('/pair', async (c) => {
       )
       .bind(deviceId, deviceName, tokenHash, nowIso, codeHash),
   ];
-  if (typeof prev === 'string') {
-    // previous_device_id is this phone's old row. Only a device of the same shop and of the same or a lower role
-    // is revoked: a staff code can never revoke an owner phone (device ids are visible to every phone via pull).
-    // The unused codes the old row issued (e.g. printed recovery codes) move to the new row, so they stay valid
-    // and are cut off if this device is revoked later.
-    stmts.push(
-      db
-        .prepare(
-          `UPDATE devices SET revoked_at = ?1
-           WHERE id = ?2 AND id <> ?3 AND revoked_at IS NULL
-             AND shop_id = (SELECT shop_id FROM devices WHERE id = ?3)
-             AND (role = 'staff' OR (SELECT role FROM devices WHERE id = ?3) = 'owner')`,
-        )
-        .bind(nowIso, prev, deviceId),
-      db
-        .prepare(
-          `UPDATE pair_codes SET issued_by = ?1
-           WHERE issued_by = ?2 AND used_at IS NULL
-             AND shop_id = (SELECT shop_id FROM devices WHERE id = ?1)
-             AND EXISTS (SELECT 1 FROM devices WHERE id = ?2 AND revoked_at = ?3)`,
-        )
-        .bind(deviceId, prev, nowIso),
-    );
-  }
-  const blockIdx = stmts.length;
-  stmts.push(...codeBlockStatements(db, deviceId, maxLocal ?? 0, now));
+  const tail = newDeviceTail(db, { deviceId, prev: typeof prev === 'string' ? prev : null, maxLocal: maxLocal ?? 0, now });
+  const blockIdx = stmts.length + tail.blockIdx;
+  stmts.push(...tail.stmts);
   if (!isRecovery) {
-    stmts.push(
-      db
-        .prepare(
-          `UPDATE pair_failures SET count = count - 1
-           WHERE day = ?1 AND count > 0 AND EXISTS (SELECT 1 FROM devices WHERE id = ?2)`,
-        )
-        .bind(utcDay(now), deviceId),
-    );
+    stmts.push(giveBackDailyAttempt(db, 'pair_failures', now, deviceId));
   }
-  stmts.push(
-    db
-      .prepare(
-        `SELECT s.id, s.name, s.upi_id, s.lang, s.sync_epoch, s.created_at
-         FROM devices d JOIN shops s ON s.id = d.shop_id WHERE d.id = ?`,
-      )
-      .bind(deviceId),
-  );
+  stmts.push(shopOfDevice(db, deviceId));
   const out = await db.batch(stmts);
   const claim = out[0]?.results?.[0] as { shop_id: string; role: Role; kind: string } | undefined;
   if (!claim) return fail(c, 403, 'invalid_code'); // an 8-digit attempt stays counted as a failure

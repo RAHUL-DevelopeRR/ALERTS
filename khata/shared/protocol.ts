@@ -89,6 +89,10 @@ export interface DeviceInfo {
   created_at: string;
   last_seen_at: string | null;
   revoked_at: string | null;
+  /** v2 (additive): how the device signed in. null/absent = paired with a code (v1) or an Android login. */
+  client?: ClientKind | null;
+  /** v2 (additive): the user account this device belongs to; null/absent = a v1 paired device. */
+  user_id?: string | null;
 }
 
 /** Every successful JSON response from an authenticated route includes these. */
@@ -103,6 +107,8 @@ export interface ApiError {
   message?: string;
   /** Present on 401 for a revoked device whose owner asked to wipe the local copy. */
   wipe?: boolean;
+  /** v2: seconds to wait, on 429 locked (also sent as the Retry-After header). */
+  retry_after?: number;
 }
 
 // ---------------------------------------------------------------- routes (all under /v1)
@@ -143,8 +149,11 @@ export interface PairResponse extends Envelope {
   code_block: { start: number; end: number };
 }
 
-/** GET /v1/me -> who am I (cheap token check used by Settings). */
-export interface MeResponse extends Envelope { device: DeviceInfo; shop: ShopInfo }
+/**
+ * GET /v1/me -> who am I (cheap token check used by Settings).
+ * v2: `user` is present when the device was created by a login (or linked with POST /users link_me).
+ */
+export interface MeResponse extends Envelope { device: DeviceInfo; shop: ShopInfo; user?: UserSummary | null }
 
 /** POST /v1/devices/pair-code  (owner) -> new 8-digit code for another phone. */
 export interface PairCodeRequest { role: Role }
@@ -262,3 +271,167 @@ export const ENTRY_CANONICAL_FIELDS = [
 export const CUSTOMER_CANONICAL_FIELDS = [
   'id', 'code', 'name', 'search_name', 'phone', 'note', 'archived_at', 'updated_at', 'created_at',
 ] as const;
+
+// ---------------------------------------------------------------- v2: accounts (additive; v1 pairing is unchanged)
+//
+// Passwords never reach the server. The client stretches them (Bitwarden-style) and sends only the result:
+//   client_key = PBKDF2-HMAC-SHA256(password_utf8_NFC, base64url_decode(salt), iterations, 32 bytes)   (WebCrypto)
+// and the server stores HMAC-SHA256(PEPPER, client_key), compared in constant time. This keeps every request far
+// below the Workers Free 10 ms CPU limit; the 600,000-iteration cost is paid on the phone / in the browser.
+// Bytes on the wire are base64url WITHOUT padding: salt = 16 bytes (22 chars), client_key = 32 bytes (43 chars).
+//
+// Sessions are device rows: every login creates a `devices` row exactly like POST /pair (own token, own customer-code
+// block, authorship, pull skipping its own rows, revoke-with-wipe), so /sync/* is unchanged.
+//   - client 'android' (and v1 paired phones): token returned in the body, sent as `Authorization: Bearer <token>`.
+//   - client 'web': token is NOT returned (token: null). The server sets the cookie
+//       kk_session=<token>; HttpOnly; Secure; SameSite=Strict; Path=/v1; Max-Age=2592000 (30 days, also enforced
+//       server side), and every cookie-authenticated request MUST carry the header `X-KK-Client: web` (CSRF guard,
+//       any method; 403 {error:'csrf'} without it). Use fetch(..., {credentials: 'same-origin'}).
+//   A web token is never accepted as a Bearer token and an app token never as a cookie (401 unauthorized).
+
+/** PBKDF2 iteration bounds the server accepts when a password is set. */
+export const PBKDF2_MIN_ITERATIONS = 300_000;
+export const PBKDF2_MAX_ITERATIONS = 2_000_000;
+export const PBKDF2_DEFAULT_ITERATIONS = 600_000;
+/** Bytes of salt (client-generated, crypto.getRandomValues) and of the derived client_key. */
+export const PW_SALT_BYTES = 16;
+export const CLIENT_KEY_BYTES = 32;
+/** Usernames: lower case, 3-32 chars of a-z 0-9 . _ - (the server lower-cases and trims what it receives). */
+export const USERNAME_RE = /^[a-z0-9._-]{3,32}$/;
+/** Name of the web session cookie, and the CSRF header the web app must send with it. */
+export const SESSION_COOKIE = 'kk_session';
+export const WEB_CLIENT_HEADER = 'X-KK-Client';
+/** Web sessions end after this many days (cookie Max-Age and devices.expires_at). */
+export const WEB_SESSION_DAYS = 30;
+
+export type ClientKind = 'android' | 'web';
+
+/** The signed-in person, as returned by login and GET /me. */
+export interface UserSummary {
+  id: string;
+  username: string;
+  display_name: string;
+  role: Role;
+}
+
+/** A user as listed to the owner (GET /v1/users). */
+export interface UserInfo extends UserSummary {
+  /** Lower-cased Google address the owner pre-registered for Google sign-in, or null. */
+  google_email: string | null;
+  /** True once that Google account signed in (its `sub` is linked). */
+  google_linked: boolean;
+  has_password: boolean;
+  created_at: string;
+  updated_at: string;
+  disabled_at: string | null;
+}
+
+/**
+ * GET /v1/config  (public). What the login screen should offer.
+ * google_client_id: the web OAuth client id for Google Identity Services, or null when Google sign-in is off
+ * (show the Google button only when it is a string).
+ */
+export interface ConfigResponse {
+  google_client_id: string | null;
+  auth: { password: true };
+  /** Server build version, e.g. '2.0.0'. */
+  version: string;
+  server_time: string;
+}
+
+/**
+ * POST /v1/auth/prelogin  (public, rate limited). Step 1 of a password login: fetch the PBKDF2 parameters.
+ * For an unknown or disabled username (or a user without a password) the server answers with a deterministic fake
+ * salt and the default iteration count, in the same shape and status, so existence is not revealed.
+ * Errors: 400 bad_request (username not matching USERNAME_RE), 429 throttled.
+ */
+export interface PreloginRequest { username: string }
+export interface PreloginResponse { salt: string; iterations: number }
+
+/** Extras every login carries (same meaning as in PairRequest). */
+export interface LoginExtras {
+  device_name: string;
+  client: ClientKind;
+  max_local_code?: number;
+  previous_device_id?: string;
+}
+
+/**
+ * POST /v1/auth/login  (public, rate limited). Step 2: send the derived key.
+ * Errors: 400 bad_request; 403 {error:'invalid_login'} for an unknown user AND for a wrong password (identical);
+ * 429 {error:'locked', retry_after} after 5 failures for that username (30 s, doubling to 15 min, never permanent,
+ * reset by a successful login); 429 {error:'throttled'} when the shop-wide daily failure budget is spent.
+ */
+export interface LoginRequest extends LoginExtras {
+  username: string;
+  /** base64url(PBKDF2(password, salt, iterations, 32 bytes)) using the PreloginResponse values. */
+  client_key: string;
+}
+
+/**
+ * Login answer: PairResponse-compatible plus the user. `token` is null for client 'web' (the session is in the
+ * HttpOnly kk_session cookie); a string for 'android' (store it like a paired token).
+ */
+export interface LoginResponse extends Omit<PairResponse, 'token'> {
+  token: string | null;
+  user: UserSummary;
+}
+
+/**
+ * POST /v1/auth/google  (public, rate limited; 404 when GOOGLE_CLIENT_IDS is not configured).
+ * `id_token` = the Google Identity Services credential (a JWT). The server checks the RS256 signature against
+ * Google's JWKS, iss, aud (one of GOOGLE_CLIENT_IDS), exp/iat (5 min skew) and email_verified. It signs in only a
+ * user the owner pre-registered: google_sub already linked, or google_email equal (case-insensitive) and not yet
+ * linked (then links it). Never creates users.
+ * Errors: 400 bad_request; 403 {error:'invalid_token'} (bad/expired/wrong audience token); 403 {error:'not_linked'}
+ * (valid Google account, but no user at this shop has it).
+ */
+export interface GoogleLoginRequest extends LoginExtras { id_token: string }
+
+/** POST /v1/auth/logout  (any session). Revokes the calling device and clears the cookie. -> OkResponse */
+
+/** GET /v1/users  (owner) */
+export interface UsersResponse extends Envelope { users: UserInfo[] }
+
+/** Password material the client computes for a new password (fresh random 16-byte salt each time). */
+export interface PasswordSet {
+  salt: string;
+  iterations: number;
+  client_key: string;
+}
+
+/**
+ * POST /v1/users  (owner device). Creates a user of this shop. Password fields are all-or-nothing; a user without a
+ * password needs google_email (Google-only). `link_me: true` (only with role 'owner', only from a device that has
+ * no user yet) also attaches the CALLING device to the new user: how a v1 paired owner phone creates its login.
+ * Errors: 400 bad_request, 400 already_linked, 409 username_taken, 409 google_email_taken, 403 forbidden.
+ */
+export interface CreateUserRequest extends Partial<PasswordSet> {
+  username: string;
+  display_name: string;
+  role: Role;
+  google_email?: string | null;
+  link_me?: boolean;
+}
+export interface UserResponse extends Envelope { user: UserInfo }
+
+/**
+ * PUT /v1/users/:id  (owner device). Changing google_email unlinks the old Google account.
+ * disabled: true revokes all of that user's devices (and the unused codes they issued) in the same transaction;
+ * disabled: false re-enables the login (devices stay revoked). A role change applies to the user's live devices.
+ * Errors: 400 cannot_change_own_role, 400 cannot_disable_self, 409 last_owner (would leave no enabled owner user),
+ * 409 google_email_taken, 404 not_found.
+ */
+export interface UpdateUserRequest {
+  display_name?: string;
+  role?: Role;
+  google_email?: string | null;
+  disabled?: boolean;
+}
+
+/**
+ * PUT /v1/users/:id/password. An owner device may set anyone's password (the user's devices are revoked); any
+ * signed-in user may change their OWN password with current_client_key (derived with the CURRENT salt/iterations
+ * from prelogin); their other devices are revoked. Errors: 403 forbidden, 403 invalid_login (wrong current key).
+ */
+export interface SetPasswordRequest extends PasswordSet { current_client_key?: string }

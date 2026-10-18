@@ -15,6 +15,9 @@ beforeEach(async () => {
     env.DB.prepare('DELETE FROM pair_codes'),
     env.DB.prepare('DELETE FROM pair_failures'),
     env.DB.prepare('DELETE FROM devices'),
+    env.DB.prepare('DELETE FROM users'),
+    env.DB.prepare('DELETE FROM login_throttle'),
+    env.DB.prepare('DELETE FROM auth_failures'),
     env.DB.prepare('DELETE FROM shops'),
     env.DB.prepare('DELETE FROM sqlite_sequence'),
   ]);

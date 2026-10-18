@@ -6,6 +6,10 @@ declare namespace Cloudflare {
     DAILY_REQUEST_CAP: string;
     PAIR_THROTTLE_AFTER: string;
     PAIR_LIMITER: RateLimit;
+    AUTH_LIMITER: RateLimit;
+    AUTH_THROTTLE_AFTER: string;
+    GOOGLE_CLIENT_IDS: string;
+    ASSETS: Fetcher;
     TEST_MIGRATIONS: import('cloudflare:test').D1Migration[];
   }
 }
