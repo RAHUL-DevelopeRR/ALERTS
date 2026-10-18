@@ -2,6 +2,8 @@ import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig(async () => {
+  // Same step wrangler runs before dev/deploy: the static-assets directory with _headers (placeholder if unbuilt).
+  await import('./scripts/prepare-assets.mjs');
   const migrations = await readD1Migrations('./migrations');
   return {
     plugins: [
@@ -11,6 +13,7 @@ export default defineConfig(async () => {
           bindings: {
             PEPPER: 'test-pepper',
             SETUP_KEY: 'test-setup-key',
+            GOOGLE_CLIENT_IDS: 'web-client.apps.googleusercontent.com, android-client.apps.googleusercontent.com',
             TEST_MIGRATIONS: migrations,
           },
         },
