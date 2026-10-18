@@ -292,7 +292,7 @@ async function main() {
     await page.locator('.screen[data-route="statement"]').waitFor();
     const taText = await text('[data-testid="st-preview"]');
     check(taText.includes('வரை நீங்கள் தர வேண்டியது ₹150'), 'Tamil statement closing line says the customer owes');
-    check(taText.includes('கடனாக வாங்கியது ₹250') && taText.includes('நீங்கள் செலுத்தியது ₹100'), 'Tamil statement lines in customer-side words');
+    check(taText.includes('பற்று ₹250') && taText.includes('வரவு ₹100'), 'Tamil statement lines in customer-side words');
     check(!taText.includes('upi://') && taText.includes('UPI மூலம் செலுத்த: murugan@okaxis'), 'UPI id, no raw upi:// link');
     const wa = await tid('st-whatsapp').boundingBox();
     check(wa && wa.y + wa.height <= 851, `WhatsApp button is on screen without scrolling (y=${wa && Math.round(wa.y)})`);
@@ -301,7 +301,7 @@ async function main() {
     await tid('st-lang-en').click();
     const enText = await text('[data-testid="st-preview"]');
     check(enText.includes('You owe ₹150 as of'), 'English statement closing line');
-    check(enText.includes('Purchase ₹250') && enText.includes('You paid ₹100 · Cash'), 'English statement lines');
+    check(enText.includes('Debit ₹250') && enText.includes('Credited ₹100 · Cash'), 'English statement lines');
     await shot('statement-text-en');
 
     console.log('Settings: language -> English, backup');

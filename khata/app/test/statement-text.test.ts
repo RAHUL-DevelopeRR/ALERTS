@@ -29,13 +29,12 @@ describe('statementText', () => {
     const lines = txt.split('\n');
     expect(lines[0]).toBe('*Murugan Stores*');
     expect(lines[1]).toBe('கணக்கு விவரம்: *Kamala* (C-0001)');
-    expect(txt).toContain('12 அக். · கடனாக வாங்கியது ₹250 · rice, dal');
-    expect(txt).toContain('12 அக். · ரத்து ~கடனாக வாங்கியது ₹1,500~');
-    expect(txt).toContain('13 அக். · நீங்கள் செலுத்தியது ₹100 · UPI');
-    // The shop's own words (Gave / Got) read backwards to the customer and are never used in the text.
+    expect(txt).toContain('12 அக். · பற்று ₹250 · rice, dal');
+    expect(txt).toContain('12 அக். · ரத்து ~பற்று ₹1,500~');
+    expect(txt).toContain('13 அக். · வரவு ₹100 · UPI');
+    // Only the ledger terms பற்று / வரவு appear, never the old Gave / Got wording.
     expect(txt).not.toContain('கொடுத்தது');
     expect(txt).not.toContain('பெற்றது');
-    expect(txt).not.toContain('பற்று');
     // The reversal itself is folded into the "cancelled" line.
     expect(txt).not.toContain('திருத்தம் ');
     expect(txt).toContain('*14 அக். 2026 வரை நீங்கள் தர வேண்டியது ₹300*');
@@ -52,12 +51,12 @@ describe('statementText', () => {
     expect(txt).toContain('Statement: *Kamala* (C-0001)');
     expect(txt).toContain('12 Oct 2026 to 14 Oct 2026');
     expect(txt).toContain('Opening balance: ₹0');
-    expect(txt).toContain('12 Oct · Purchase ₹150');
-    expect(txt).toContain('12 Oct · Cancelled ~Purchase ₹1,500~');
-    expect(txt).toContain('13 Oct · You paid ₹100 · UPI');
+    expect(txt).toContain('12 Oct · Debit ₹150');
+    expect(txt).toContain('12 Oct · Cancelled ~Debit ₹1,500~');
+    expect(txt).toContain('13 Oct · Credited ₹100 · UPI');
     expect(txt).toContain('*You owe ₹300 as of 14 Oct 2026*');
-    expect(txt.split('\n').filter((l) => l.includes('Purchase')).length).toBe(3);
-    expect(txt).not.toMatch(/\b(Gave|Got|Debit|Credit)\b/);
+    expect(txt.split('\n').filter((l) => l.includes('Debit')).length).toBe(3);
+    expect(txt).not.toMatch(/\b(Gave|Got|Purchase)\b/);
   });
 
   it('omits the UPI lines when nothing is due or no UPI id is set', async () => {

@@ -2,8 +2,8 @@
  * Pure builders for the text a shopkeeper sends: the WhatsApp statement, the one-line WhatsApp reminder and the
  * one-line SMS. No DOM, no I/O; unit-tested in test/statement-text.test.ts.
  *
- * The text is read by the CUSTOMER, so entries use customer-side words (stx.kind.*: "Purchase",
- * "You paid"), never the shop's own Gave / Got, which read backwards from the customer's side.
+ * Entry lines use the ledger terms the client asked for (stx.kind.*): "Debit" / பற்று = goods going out
+ * (loan given), "Credited" / வரவு = money coming in (loan repaid). Balance lines stay in the customer's voice ("You owe").
  * WhatsApp formatting: *bold*, ~strike~. A cancelled entry and its reversal print as ONE "Cancelled" line with the
  * amount struck through. A write-off's reason is the shop's private note and is never sent.
  * The raw upi:// link is not included by default: WhatsApp does not linkify it, so it shows as a long
