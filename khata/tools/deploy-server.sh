@@ -9,13 +9,15 @@
 # Usage:  ./khata/tools/deploy-server.sh [--rotate-setup-key]
 #
 # What it does: creates the D1 database "khata" (APAC) if missing, writes its id into wrangler.jsonc, applies
-# migrations, generates PEPPER and SETUP_KEY once (kept in khata/api/.deploy-secrets, never committed), deploys
-# the Worker with those secrets, and checks it answers. It never changes an existing PEPPER (that would log out
-# every phone).
+# migrations, generates PEPPER and SETUP_KEY once (kept in khata/api/.deploy-secrets, never committed), builds the
+# web app (khata/app -> dist-web, served by the Worker as static assets), deploys the Worker with those secrets, and
+# checks it answers. It never changes an existing PEPPER (that would log out every phone). Set SKIP_WEB_BUILD=1 to
+# deploy without rebuilding the web app (the previous build in khata/app/dist-web is used if present).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 API="$(cd "$HERE/../api" && pwd)"
+APP="$(cd "$HERE/../app" && pwd)"
 SECRETS="$API/.deploy-secrets"
 DB_NAME="khata"
 ROTATE_SETUP=0
@@ -30,13 +32,13 @@ command -v curl >/dev/null || die "curl is required."
 W() { npx --no-install wrangler "$@"; }
 export WRANGLER_SEND_METRICS=false
 
-say "1/6  Checking Cloudflare sign-in"
+say "1/7  Checking Cloudflare sign-in"
 if ! WHO="$(W whoami 2>&1)" || grep -qi "not authenticated\|You are not" <<<"$WHO"; then
   die "Not signed in to Cloudflare. Run 'cd khata/api && npx wrangler login', or set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID."
 fi
 grep -E "associated with the email|Account Name|Account ID|│" <<<"$WHO" | head -6 || true
 
-say "2/6  D1 database '$DB_NAME'"
+say "2/7  D1 database '$DB_NAME'"
 find_db_id() {
   W d1 list --json 2>/dev/null | node -e '
     let s = ""; process.stdin.on("data", d => s += d).on("end", () => {
@@ -60,10 +62,10 @@ node -e '
   if (u !== t) { fs.writeFileSync(f, u); console.log("wrangler.jsonc updated"); } else console.log("wrangler.jsonc already up to date");
 ' "$DB_ID"
 
-say "3/6  Applying database migrations"
+say "3/7  Applying database migrations"
 CI=true W d1 migrations apply "$DB_NAME" --remote
 
-say "4/6  Secrets"
+say "4/7  Secrets"
 umask 077
 touch "$SECRETS"
 get_secret() { grep -E "^$1=" "$SECRETS" | head -1 | cut -d= -f2- || true; }
@@ -102,7 +104,18 @@ OUT="$SECRETS_JSON" node -e '
   require("fs").writeFileSync(process.env.OUT, JSON.stringify(o));
 ' "$PEPPER" "$SETUP_KEY" "$UPLOAD_PEPPER" "$UPLOAD_SETUP"
 
-say "5/6  Deploying the Worker"
+say "5/7  Building the web app"
+if [ "${SKIP_WEB_BUILD:-0}" = 1 ] && [ -f "$APP/dist-web/index.html" ]; then
+  echo "SKIP_WEB_BUILD=1: using the existing build in $APP/dist-web"
+else
+  ( cd "$APP" \
+    && { [ -d node_modules ] && [ node_modules/.package-lock.json -nt package-lock.json ] || npm ci --no-audit --no-fund --legacy-peer-deps; } \
+    && npx --no-install vite build --mode web ) || die "The web app build failed (see the output above)."
+fi
+[ -f "$APP/dist-web/index.html" ] || die "No web app build in $APP/dist-web."
+# wrangler's build step (api/scripts/prepare-assets.mjs) adds dist-web/_headers (CSP etc.) before deploying.
+
+say "6/7  Deploying the Worker"
 DEPLOY_LOG="$(mktemp)"
 if ! W deploy --secrets-file "$SECRETS_JSON" 2>&1 | tee "$DEPLOY_LOG"; then
   if grep -qi "workers.dev subdomain" "$DEPLOY_LOG"; then
@@ -115,7 +128,7 @@ rm -f "$DEPLOY_LOG"
 [ -n "$URL" ] || die "Deployed, but could not read the workers.dev address from the output. Find it in the Cloudflare dashboard."
 grep -q '^URL=' "$SECRETS" || echo "URL=$URL" >> "$SECRETS"
 
-say "6/6  Checking the live server"
+say "7/7  Checking the live server"
 ok=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
   if curl -fsS --max-time 10 "$URL/v1/health" | grep -q '"ok":true'; then ok=1; break; fi
@@ -131,12 +144,15 @@ cat <<EOF
 $(printf '\033[32mServer is live.\033[0m')
 
   Server address : $URL
+  Web app        : $URL/          (owner sign-in with user id & password; staff use the phone app)
   Setup key      : ${SETUP_KEY:-<already set on the server; run with --rotate-setup-key to issue a new one>}
 
 On the OWNER's phone:  Settings → Server copy → "First-time setup"
   enter the server address, the setup key and the shop name, then tap Connect.
 Then:  Settings → Devices → "Recovery codes" → write them down and keep them in the cash box.
-Other phones:  owner phone → Devices → "Add a phone" → type that 8-digit code on the other phone.
+Then:  Settings → Users → "Create a login for me" (user id + password) so the owner can sign in on the web at $URL/.
+Other phones:  owner phone → Devices → "Add a phone" → type that 8-digit code on the other phone,
+               or Users → "Add user" and sign in on the other phone with that user id & password.
 
 Keep $SECRETS (PEPPER, SETUP_KEY) backed up with the APK signing key. Never commit it.
 After handover you can disable first-time setup:  cd khata/api && npx wrangler secret delete SETUP_KEY

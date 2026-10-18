@@ -3,8 +3,12 @@ import { formatINR } from '../../core/ledger';
 import { selfTest } from '../../data/index';
 import type { Settings } from '../../data/types';
 import type { Role } from '../../data/types';
-import { setLang, t } from '../../i18n';
+import type { AuthEvent, UserInfo } from '../../../../shared/protocol';
+import { hasKey, setLang, t } from '../../i18n';
 import { afterWrite, app, refreshSettings } from '../app';
+import { endWebSession } from '../web/session';
+import { isWebApp } from '../web/flag';
+import { askNewPassword, passwordField, sessionEndsText, signOutFlow, usernameField } from './login';
 import { listLocalCopies, restoreFromFile, restoreLocalCopy, saveBackupCopy } from '../backup';
 import { add, button, clear, h, type Child } from '../components/dom';
 import { actionSheet, alertDialog, confirmDialog, dialog, toast } from '../components/overlay';
@@ -16,6 +20,7 @@ import { askNewPin } from '../gate';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { APP_VERSION } from '../version';
+import { voiceSettingsSection } from '../voice/settings-section';
 
 const LOCK_CHOICES = [2, 10, 30];
 const CONFIRM_CHOICES = [200_000, 500_000, 1_000_000, 2_500_000];
@@ -218,7 +223,7 @@ function backupSection(s: Settings): HTMLElement {
 // ------------------------------------------------------------------ shop server
 
 function connectForm(s: Settings): HTMLElement {
-  let mode: 'code' | 'setup' = 'code';
+  let mode: 'code' | 'login' | 'setup' = 'code';
   const url = h('input', { class: 'input', attrs: { type: 'url', inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: t('set.serverUrlPh'), 'data-testid': 'srv-url' } });
   const devName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 60, autocomplete: 'off' } });
   const code = h('input', { class: 'input', attrs: { type: 'text', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'data-testid': 'srv-code' } });
@@ -232,18 +237,27 @@ function connectForm(s: Settings): HTMLElement {
   const codeField = h('label', 'field', h('span', { class: 'field-label', text: t('set.pairCode') }), code);
   const keyField = h('label', 'field hidden', h('span', { class: 'field-label', text: t('set.setupKey') }), key);
   const shopField = h('label', 'field hidden', h('span', { class: 'field-label', text: t('set.shopName') }), shopName);
-  const seg = h('div', 'seg');
+  // Sign in with user id & password (v2): the device is named with the same field; the password never leaves the form.
+  const user = usernameField('srv-user');
+  const pw = passwordField({ label: t('auth.password'), testid: 'srv-pw', autocomplete: 'current-password' });
+  user.wrap.classList.add('hidden');
+  pw.wrap.classList.add('hidden');
+  const seg = h('div', { class: 'seg', attrs: { 'data-testid': 'srv-mode' } });
+  const label = (): string => (mode === 'login' ? t('auth.signInBtn') : t('set.pairBtn'));
   const paintSeg = (): void => {
     clear(seg);
     seg.append(
-      h('button', { class: mode === 'code' ? 'on' : '', attrs: { type: 'button' }, text: t('set.pairWithCode'), on: { click: () => { mode = 'code'; paintSeg(); } } }),
-      h('button', { class: mode === 'setup' ? 'on' : '', attrs: { type: 'button' }, text: t('set.firstSetup'), on: { click: () => { mode = 'setup'; paintSeg(); } } }),
+      h('button', { class: mode === 'code' ? 'on' : '', attrs: { type: 'button', 'data-testid': 'srv-mode-code' }, text: t('set.pairWithCode'), on: { click: () => { mode = 'code'; paintSeg(); } } }),
+      h('button', { class: mode === 'login' ? 'on' : '', attrs: { type: 'button', 'data-testid': 'srv-mode-login' }, text: t('auth.signInShort'), on: { click: () => { mode = 'login'; paintSeg(); } } }),
+      h('button', { class: mode === 'setup' ? 'on' : '', attrs: { type: 'button', 'data-testid': 'srv-mode-setup' }, text: t('set.firstSetup'), on: { click: () => { mode = 'setup'; paintSeg(); } } }),
     );
     codeField.classList.toggle('hidden', mode !== 'code');
     keyField.classList.toggle('hidden', mode !== 'setup');
     shopField.classList.toggle('hidden', mode !== 'setup');
+    user.wrap.classList.toggle('hidden', mode !== 'login');
+    pw.wrap.classList.toggle('hidden', mode !== 'login');
+    go.textContent = label();
   };
-  paintSeg();
   const go = button(t('set.pairBtn'), () => {
     err.classList.add('hidden');
     void (async () => {
@@ -252,30 +266,299 @@ function connectForm(s: Settings): HTMLElement {
       try {
         const dn = devName.value.trim() || 'Phone';
         if (mode === 'code') await app.sync.pair(url.value.trim(), code.value.trim(), dn);
-        else await app.sync.setupAndPair(url.value.trim(), key.value, shopName.value.trim(), dn);
+        else if (mode === 'login') {
+          await app.sync.login(url.value.trim(), user.input.value, pw.input.value, dn, { onProgress: (p) => { go.textContent = p === 'deriving' ? t('auth.stepDerive') : t('auth.stepLogin'); } });
+          pw.input.value = '';
+        } else await app.sync.setupAndPair(url.value.trim(), key.value, shopName.value.trim(), dn);
         await refreshSettings();
-        toast(t('set.paired'));
+        toast(mode === 'login' ? t('auth.signedIn') : t('set.paired'));
         void router.rerender();
       } catch (e) {
         err.textContent = errorText(e);
         err.classList.remove('hidden');
       } finally {
         go.disabled = false;
-        go.textContent = t('set.pairBtn');
+        go.textContent = label();
       }
     })();
   }, 'btn btn-primary btn-block', { 'data-testid': 'srv-connect' });
+  paintSeg();
   return h(
     'div',
     null,
     seg,
     h('label', 'field', h('span', { class: 'field-label', text: t('set.serverUrl') }), url),
     codeField,
+    user.wrap,
+    pw.wrap,
     keyField,
     shopField,
     h('label', 'field', h('span', { class: 'field-label', text: t('set.deviceName') }), devName),
     go,
     err,
+  );
+}
+
+// ------------------------------------------------------------------ accounts (v2)
+
+function roleText(role: Role): string {
+  return role === 'owner' ? t('set.roleOwner') : t('set.roleStaff');
+}
+
+/** Who is signed in on this device, with Sign out / Change my password. */
+function accountBlock(s: Settings): HTMLElement {
+  const acc = app.sync.getAccount();
+  const web = isWebApp();
+  const signOut = button(t('auth.signOut'), () => {
+    void (async () => {
+      if (web) {
+        if (!(await confirmDialog({ title: t('auth.signOutTitle'), message: t('web.signOutWipe'), ok: t('auth.signOut'), danger: true }))) return;
+        await endWebSession({ logout: true });
+        return;
+      }
+      if (await signOutFlow()) void router.rerender();
+    })();
+  }, 'btn btn-block', { 'data-testid': 'sign-out' });
+  const changePw = button(t('auth.changeMyPw'), () => {
+    void (async () => {
+      const r = await askNewPassword({ title: t('auth.changeMyPw'), current: true });
+      if (!r) return;
+      try {
+        await app.sync.changeOwnPassword(r.current, r.password);
+        toast(t('auth.pwChanged'));
+      } catch (e) {
+        toast(errorText(e), { error: true });
+      }
+    })();
+  }, 'btn btn-block', { 'data-testid': 'change-pw' });
+  if (!acc) {
+    const createMine = s.role === 'owner' && !web
+      ? button(t('auth.createMine'), () => void createLoginForMe(), 'btn btn-primary btn-block', { 'data-testid': 'create-mine' })
+      : null;
+    return block(
+      h('p', { class: 'input-help', attrs: { 'data-testid': 'account-line' }, text: t('auth.noLogin') }),
+      createMine ? h('p', { class: 'input-help', style: { margin: '6px 2px 10px' }, text: t('auth.createMineHelp') }) : null,
+      createMine,
+    );
+  }
+  const ends = sessionEndsText(acc.expires_at);
+  return block(
+    h('p', { style: { fontWeight: '700' }, attrs: { 'data-testid': 'account-line' }, text: t('auth.signedInAs', { name: acc.user.display_name, user: acc.user.username }) }),
+    h('p', { class: 'input-help', style: { marginBottom: '10px' }, text: `${roleText(acc.user.role)}${ends ? ` · ${ends}` : ''}` }),
+    changePw,
+    signOut,
+  );
+}
+
+/** A paired owner phone without a login creates its own (link_me): user id + password. */
+async function createLoginForMe(): Promise<void> {
+  const user = usernameField('mine-user');
+  const name = h('input', { class: 'input', attrs: { type: 'text', maxlength: 80, autocomplete: 'name', 'data-testid': 'mine-name' } });
+  const a = passwordField({ label: t('auth.newPassword'), testid: 'mine-pw', autocomplete: 'new-password' });
+  const b = passwordField({ label: t('auth.newPassword2'), testid: 'mine-pw2', autocomplete: 'new-password' });
+  const ok = await dialog<boolean>({
+    title: t('auth.createMine'),
+    body: h('div', null, user.wrap, h('label', 'field', h('span', { class: 'field-label', text: t('auth.displayName') }), name), a.wrap, b.wrap),
+    buttons: [
+      { label: t('common.cancel'), value: false },
+      { label: t('common.save'), value: true, kind: 'primary', enable: () => user.input.value.trim().length >= 3 && a.input.value.length >= 8 && a.input.value === b.input.value },
+    ],
+    dismissValue: false,
+  });
+  if (!ok) return;
+  try {
+    const u = await app.sync.createUser({ username: user.input.value, display_name: name.value.trim() || user.input.value.trim(), role: 'owner', password: a.input.value, link_me: true });
+    toast(t('auth.userCreated', { user: u.username }));
+    void router.rerender();
+  } catch (e) {
+    toast(errorText(e), { error: true });
+  }
+}
+
+async function addUserDialog(): Promise<void> {
+  const user = usernameField('new-user');
+  const name = h('input', { class: 'input', attrs: { type: 'text', maxlength: 80, autocomplete: 'off', 'data-testid': 'new-name' } });
+  let role: Role = 'staff';
+  const seg = h('div', { class: 'seg', attrs: { 'data-testid': 'new-role' } });
+  const paint = (): void => {
+    clear(seg);
+    seg.append(
+      h('button', { class: role === 'staff' ? 'on' : '', attrs: { type: 'button' }, text: t('set.roleStaff'), on: { click: () => { role = 'staff'; paint(); } } }),
+      h('button', { class: role === 'owner' ? 'on' : '', attrs: { type: 'button' }, text: t('set.roleOwner'), on: { click: () => { role = 'owner'; paint(); } } }),
+    );
+  };
+  paint();
+  const a = passwordField({ label: t('auth.newPassword'), testid: 'new-pw', autocomplete: 'new-password' });
+  const b = passwordField({ label: t('auth.newPassword2'), testid: 'new-pw2', autocomplete: 'new-password' });
+  const gmail = h('input', { class: 'input', attrs: { type: 'email', inputmode: 'email', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: 'name@gmail.com', 'data-testid': 'new-gmail' } });
+  const valid = (): boolean => {
+    const pw = a.input.value;
+    const g = gmail.value.trim();
+    const pwOk = pw.length === 0 ? g.length > 0 : pw.length >= 8 && pw === b.input.value;
+    return user.input.value.trim().length >= 3 && pwOk;
+  };
+  const ok = await dialog<boolean>({
+    title: t('auth.addUser'),
+    body: h(
+      'div',
+      null,
+      user.wrap,
+      h('label', 'field', h('span', { class: 'field-label', text: t('auth.displayName') }), name),
+      h('div', 'field', h('span', { class: 'field-label', text: t('auth.role') }), seg),
+      a.wrap,
+      b.wrap,
+      h('label', 'field', h('span', { class: 'field-label', text: t('auth.gmail') }), gmail, h('p', { class: 'input-help', text: t('auth.gmailHelp') })),
+    ),
+    buttons: [
+      { label: t('common.cancel'), value: false },
+      { label: t('common.save'), value: true, kind: 'primary', enable: valid },
+    ],
+    dismissValue: false,
+  });
+  if (!ok) return;
+  try {
+    const u = await app.sync.createUser({
+      username: user.input.value,
+      display_name: name.value.trim() || user.input.value.trim(),
+      role,
+      password: a.input.value || null,
+      google_email: gmail.value.trim() || null,
+    });
+    toast(t('auth.userCreated', { user: u.username }));
+    void router.rerender();
+  } catch (e) {
+    toast(errorText(e), { error: true });
+  }
+}
+
+function userRow(u: UserInfo, me: string | null, web: boolean, reload: () => void): HTMLElement {
+  const bits: string[] = [roleText(u.role)];
+  if (u.disabled_at) bits.push(t('auth.disabled'));
+  if (!u.has_password) bits.push(t('auth.noPassword'));
+  if (u.google_email) {
+    if (u.google_linked) bits.push(t('auth.googleLinked'));
+    else if (u.google_email_expires_at && Date.parse(u.google_email_expires_at) > Date.now()) bits.push(t('auth.googlePending', { when: when(u.google_email_expires_at) }));
+    else bits.push(t('auth.googleExpired'));
+  }
+  const isMe = u.id === me;
+  const actions: Child[] = [];
+  if (!web && !isMe) {
+    actions.push(
+      button(t('auth.resetPw'), () => {
+        void (async () => {
+          const r = await askNewPassword({ title: t('auth.resetPwTitle', { user: u.username }) });
+          if (!r) return;
+          try {
+            await app.sync.resetPassword(u.id, r.password);
+            toast(t('auth.resetDone'));
+          } catch (e) {
+            toast(errorText(e), { error: true });
+          }
+        })();
+      }, 'btn', { 'data-testid': `user-reset-${u.username}` }),
+      button(u.disabled_at ? t('auth.enable') : t('auth.disable'), () => {
+        void (async () => {
+          if (!u.disabled_at && !(await confirmDialog({ message: t('auth.disableConfirm', { user: u.username }), ok: t('auth.disable'), danger: true }))) return;
+          try {
+            await app.sync.updateUser(u.id, { disabled: !u.disabled_at });
+            toast(t('auth.userSaved'));
+            reload();
+          } catch (e) {
+            toast(errorText(e), { error: true });
+          }
+        })();
+      }, u.disabled_at ? 'btn' : 'btn btn-danger', { 'data-testid': `user-toggle-${u.username}` }),
+    );
+  }
+  return h(
+    'div',
+    { class: 'set-row user-row', style: { paddingLeft: '0', paddingRight: '0' }, attrs: { 'data-testid': `user-${u.username}` } },
+    h(
+      'span',
+      'grow',
+      `${u.display_name} (${u.username})`,
+      isMe ? h('span', { class: 'badge', text: t('auth.thisDevice') }) : null,
+      h('span', { class: 'sub', text: bits.join(' · ') }),
+    ),
+    actions.length ? h('div', 'user-actions', actions) : null,
+  );
+}
+
+/** Owner: the shop's logins (list from the server; add / reset / disable need step-up and are phone-only). */
+function usersSection(): HTMLElement {
+  const web = isWebApp();
+  const box = h('div', { attrs: { 'data-testid': 'users-list' } }, h('p', { class: 'input-help', text: t('common.working') }));
+  const load = async (): Promise<void> => {
+    try {
+      const users = await app.sync.listUsers();
+      const me = app.sync.getAccount()?.user.id ?? null;
+      clear(box);
+      for (const u of users) box.appendChild(userRow(u, me, web, () => void load()));
+    } catch (e) {
+      clear(box);
+      box.appendChild(h('p', { class: 'input-help', text: `${errorText(e)} ${t('common.needsInternet')}` }));
+    }
+  };
+  void load();
+  return h(
+    'div',
+    null,
+    h('h2', { class: 'section-title', text: t('auth.users') }),
+    h(
+      'div',
+      'list',
+      block(
+        h('p', { class: 'input-help', style: { marginBottom: '10px' }, text: web ? t('web.phoneOnly') : t('auth.usersHelp') }),
+        box,
+        web ? null : button(t('auth.addUser'), () => void addUserDialog(), 'btn btn-block', { 'data-testid': 'add-user' }),
+      ),
+    ),
+  );
+}
+
+function eventLabel(e: AuthEvent): string {
+  const k = `auth.ev.${e.action}`;
+  return hasKey(k) ? t(k) : e.action;
+}
+
+function eventDetail(e: AuthEvent): string {
+  const d = e.detail ?? {};
+  const parts: string[] = [];
+  if (typeof d.username === 'string') parts.push(d.username);
+  if (typeof d.client === 'string') parts.push(d.client);
+  if (typeof d.why === 'string') parts.push(d.why);
+  if (typeof d.how === 'string') parts.push(d.how);
+  if (typeof d.role === 'string' && e.action === 'user.create') parts.push(d.role);
+  return parts.join(' · ');
+}
+
+/** Owner: the audit trail (GET /auth/events), newest first. */
+function activitySection(): HTMLElement {
+  const box = h('div', { attrs: { 'data-testid': 'activity-list' } }, h('p', { class: 'input-help', text: t('common.working') }));
+  void (async () => {
+    try {
+      const events = await app.sync.authEvents();
+      clear(box);
+      if (!events.length) box.appendChild(h('p', { class: 'input-help', text: t('auth.activityNone') }));
+      for (const e of events.slice(0, 50)) {
+        box.appendChild(
+          h(
+            'div',
+            { class: 'set-row', style: { paddingLeft: '0', paddingRight: '0' } },
+            h('span', 'grow', eventLabel(e), h('span', { class: 'sub', text: [when(e.at), eventDetail(e)].filter(Boolean).join(' · ') })),
+          ),
+        );
+      }
+    } catch (e) {
+      clear(box);
+      box.appendChild(h('p', { class: 'input-help', text: `${errorText(e)} ${t('common.needsInternet')}` }));
+    }
+  })();
+  return h(
+    'div',
+    null,
+    h('h2', { class: 'section-title', text: t('auth.activity') }),
+    h('div', 'list', block(h('p', { class: 'input-help', style: { marginBottom: '6px' }, text: t('auth.activityHelp') }), box)),
   );
 }
 
@@ -332,7 +615,9 @@ async function devicesBlock(s: Settings): Promise<HTMLElement> {
 }
 
 async function serverSection(s: Settings): Promise<HTMLElement> {
+  const web = isWebApp();
   if (!s.paired) {
+    if (web) return h('section', { attrs: { id: 'sec-sync' } });
     const formHost = h('div', null);
     const open = button(t('set.connect'), () => {
       open.remove();
@@ -347,19 +632,22 @@ async function serverSection(s: Settings): Promise<HTMLElement> {
   }
   const st = app.sync.status();
   const owner = s.role === 'owner';
+  const account = app.sync.getAccount();
   const syncNow = button(t('set.syncNow'), () => void busy(syncNow, async () => {
     await app.sync.syncNow();
     void router.rerender();
   }), 'btn btn-primary btn-block', { 'data-testid': 'sync-now' });
   const status = block(
-    h('p', { style: { fontWeight: '700' }, text: `${pillContent(st).text}` }),
+    h('p', { style: { fontWeight: '700' }, text: web ? t('web.onlineCopy') : `${pillContent(st).text}` }),
+    web ? h('p', { class: 'input-help', text: t('web.onlineCopyHelp') }) : null,
     h('p', { class: 'input-help', text: `${s.role === 'owner' ? t('set.role.owner') : t('set.role.staff')} · ${s.device_name ?? ''}` }),
     h('p', { class: 'input-help', style: { marginBottom: '10px' }, text: t('set.lastSync', { when: when(st.last_sync_at ?? s.last_sync_at) }) }),
     st.error ? h('div', { class: 'inline-warn', style: { marginBottom: '10px' }, text: errorText({ code: st.error }) }) : null,
     syncNow,
   );
   const ownerBlocks: Child[] = [];
-  if (owner) {
+  if (owner) ownerBlocks.push(usersSection());
+  if (owner && !web) {
     const addPhone = button(t('set.addPhone'), () => {
       void (async () => {
         const role = await dialog<Role | null>({
@@ -413,6 +701,7 @@ async function serverSection(s: Settings): Promise<HTMLElement> {
       h('div', { class: 'list', style: { marginTop: '12px' } }, block(download)),
     );
   }
+  if (owner) ownerBlocks.push(activitySection());
   const reupload = button(t('set.reupload'), () => {
     void (async () => {
       if (!(await confirmDialog({ message: t('set.reuploadConfirm'), ok: t('set.reupload') }))) return;
@@ -443,8 +732,11 @@ async function serverSection(s: Settings): Promise<HTMLElement> {
     { attrs: { id: 'sec-sync' } },
     h('h2', { class: 'section-title', text: t('set.sync') }),
     h('div', 'list', status),
+    h('h2', { class: 'section-title', text: t('web.account') }),
+    h('div', 'list', accountBlock(s)),
     ownerBlocks,
-    h('div', { class: 'list', style: { marginTop: '12px' } }, block(reupload, disconnect)),
+    // A signed-in device leaves with Sign out (above); Disconnect stays for v1 code-paired phones.
+    h('div', { class: 'list', style: { marginTop: '12px' } }, block(reupload, account || web ? null : disconnect)),
   );
 }
 
@@ -497,16 +789,18 @@ export const settingsScreen: Screen = async (root, route) => {
   const s = await refreshSettings();
   const { body } = shell(root, { title: t('set.title'), back: true });
   const [server, attention, about] = await Promise.all([serverSection(s), attentionSection(), aboutSection()]);
+  const web = isWebApp();
   add(
     body,
     shopSection(s),
     langSection(s),
-    securitySection(s),
+    web ? null : securitySection(s),
     safetySection(s),
     backupSection(s),
     server,
     attention,
-    section(t('set.privacy'), block(h('p', { class: 'input-help', style: { fontSize: '15px' }, text: t('set.privacyBody') }))),
+    await voiceSettingsSection(), // Settings → Voice entry (src/ui/voice/settings-section.ts)
+    section(t('set.privacy'), block(h('p', { class: 'input-help', style: { fontSize: '15px' }, text: web ? t('web.privacyBody') : t('set.privacyBody') }))),
     about,
   );
   if (route.params.section === 'sync') {

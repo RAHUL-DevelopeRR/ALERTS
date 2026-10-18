@@ -12,12 +12,15 @@ import type { Platform } from '../platform/types';
 import { Engine, type SyncEngineOptions } from './engine';
 import type { SyncEngine } from './types';
 
-export type { SyncEngine, SyncStatus, SyncPhase } from './types';
+export type { SyncEngine, SyncStatus, SyncPhase, AccountInfo, LoginProgress, NewUserInput, StepUpAnswer, StepUpProvider } from './types';
 export { SyncError } from './types';
-export { ApiClient, ApiFailure, normalizeServerUrl, normalizePairCode, isDevHost, errorCodeFor, REQUEST_TIMEOUT_MS } from './api';
+export { ApiClient, ApiFailure, normalizeServerUrl, normalizePairCode, isDevHost, errorCodeFor, REQUEST_TIMEOUT_MS, type StepUpProof } from './api';
+export { deriveClientKey, newSalt, newPasswordSet, checkNewPassword, normalizeUsername, PASSWORD_MIN_LENGTH } from './password';
 export {
   Engine,
   TOKEN_KEY,
+  KNOWN_DEVICE_KEY,
+  ACCOUNT_FILE,
   UNSYNCED_FILE_PREFIX,
   BACKOFF_MS,
   DEBOUNCE_MS,

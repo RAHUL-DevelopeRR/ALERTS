@@ -64,6 +64,23 @@ function recognitionCtor(): SRConstructor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
+/**
+ * Chrome 139+ can run recognition on the device (`processLocally`, `SpeechRecognition.available()/install()`),
+ * which would keep the audio off Google's servers. It is optional and feature-detected only: this build never sets
+ * processLocally (no Tamil pack is known to exist), but the UI may use this to word the privacy notice.
+ * Returns true only when the browser reports a language pack as installed ('available'); false in every other case.
+ */
+export async function localRecognitionAvailable(lang: string): Promise<boolean> {
+  try {
+    const Ctor = recognitionCtor() as (SRConstructor & { available?: (o: unknown) => Promise<unknown> }) | null;
+    if (!Ctor || typeof Ctor.available !== 'function') return false;
+    const r = await Ctor.available({ langs: [lang], processLocally: true });
+    return r === 'available';
+  } catch {
+    return false;
+  }
+}
+
 function phraseCtor(): PhraseConstructor | null {
   if (typeof window === 'undefined') return null;
   const w = window as unknown as { SpeechRecognitionPhrase?: PhraseConstructor };

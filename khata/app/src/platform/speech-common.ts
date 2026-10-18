@@ -27,6 +27,18 @@ export function cleanAlternatives(list: readonly unknown[] | null | undefined, m
   return out;
 }
 
+/**
+ * Privacy notice for voice entry, in both app languages. The UI shows it (Settings → Privacy and the first mic
+ * tap); it is true for every real Speech implementation: Android sends the audio to Google's speech service, the
+ * browser build to Chrome's (Google) speech backend. Keep the wording in step with `Speech` in types.ts.
+ */
+export const SPEECH_PRIVACY_NOTE: Readonly<Record<'en' | 'ta', string>> = {
+  en:
+    'Voice entry sends what you say to Google\u2019s speech recognition service to turn it into text (Android: Google\u2019s speech service; browser: Chrome). It needs internet. The app does not keep the audio; only the entry you confirm is saved, after you check the customer, amount and Debit/Credit and tap Save.',
+  ta:
+    'குரல் பதிவில் நீங்கள் பேசுவது உரையாக மாற்ற Google-இன் பேச்சு அறிதல் சேவைக்கு அனுப்பப்படுகிறது (ஆண்ட்ராய்டு: Google பேச்சு சேவை; பிரவுசர்: Chrome). இதற்கு இணையம் தேவை. ஆப் ஒலியைச் சேமிப்பதில்லை; வாடிக்கையாளர், தொகை, பற்று/வரவு சரிபார்த்து "சேமி" தட்டிய பிறகு அந்தப் பதிவு மட்டுமே சேமிக்கப்படும்.',
+};
+
 export function speechError(code: string): Error {
   return new Error(`SPEECH_ERROR:${code}`);
 }

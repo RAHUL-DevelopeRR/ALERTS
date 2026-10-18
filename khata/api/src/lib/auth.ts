@@ -51,7 +51,7 @@ export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
            requests_today = CASE WHEN requests_day = ?4 THEN requests_today + 1 ELSE 1 END,
            requests_day = ?4
          WHERE token_hash = ?1 AND ${LIVE}
-         RETURNING id, shop_id, name, role, created_at, last_seen_at, revoked_at, requests_today, user_id, client`,
+         RETURNING id, shop_id, name, role, created_at, last_seen_at, revoked_at, requests_today, user_id, client, stepup_until`,
       )
       .bind(hash, nowIso, cred.via, day),
     db
@@ -80,5 +80,15 @@ export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
 
 export const ownerOnly: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (c.get('device').role !== 'owner') return fail(c, 403, 'forbidden');
+  await next();
+};
+
+/**
+ * Owner-power routes are never available to a web session, whatever its role: a browser left open on a shared PC or
+ * an XSS must not be able to create logins, mint codes or revoke phones. (The client kind is self-declared, so this is
+ * defence in depth; the real gate is step-up, see lib/stepup.ts.)
+ */
+export const noWeb: MiddlewareHandler<AppEnv> = async (c, next) => {
+  if (c.get('device').client === 'web') return fail(c, 403, 'web_forbidden');
   await next();
 };

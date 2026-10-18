@@ -10,7 +10,9 @@ import {
   type UserSummary,
 } from '../../../shared/protocol';
 import type { AppEnv } from '../env';
-import { auth, ownerOnly } from '../lib/auth';
+import { auditStatement } from '../lib/audit';
+import { auth, noWeb, ownerOnly } from '../lib/auth';
+import { requireStepUp } from '../lib/stepup';
 import { blockFromResult, codeBlockStatements, mintPairCode } from '../lib/codes';
 import { normaliseCode, pepperHash, randomRecoveryCode } from '../lib/crypto';
 import { badRequest, envelope, fail, isObj, readJson } from '../lib/http';
@@ -36,9 +38,11 @@ deviceRoutes.get('/me', auth, async (c) => {
   });
 });
 
-deviceRoutes.post('/devices/pair-code', auth, ownerOnly, async (c) => {
+deviceRoutes.post('/devices/pair-code', auth, ownerOnly, noWeb, async (c) => {
   const body = await readJson(c);
   if (!isObj(body) || (body.role !== 'owner' && body.role !== 'staff')) return badRequest(c, 'role');
+  const denied = await requireStepUp(c);
+  if (denied) return denied;
   const now = new Date();
   const dev = c.get('device');
   const minted = await mintPairCode(c.env.DB, c.env.PEPPER ?? '', {
@@ -49,14 +53,17 @@ deviceRoutes.post('/devices/pair-code', auth, ownerOnly, async (c) => {
     now,
     ttlMin: PAIR_CODE_TTL_MIN,
   });
+  await auditStatement(c.env.DB, now, { shopId: dev.shop_id, actorDeviceId: dev.id, actorUserId: dev.user_id, action: 'pair_code.mint', detail: { role: body.role } }).run();
   return c.json<PairCodeResponse>({ code: minted.code, expires_at: minted.expires_at, role: body.role, ...envelope(c, now) });
 });
 
-deviceRoutes.post('/devices/recovery-codes', auth, ownerOnly, async (c) => {
+deviceRoutes.post('/devices/recovery-codes', auth, ownerOnly, noWeb, async (c) => {
   const body = await readJson(c);
   if (!isObj(body)) return badRequest(c);
   const count = body.count ?? 5;
   if (typeof count !== 'number' || !Number.isInteger(count) || count < 3 || count > 5) return badRequest(c, 'count');
+  const denied = await requireStepUp(c);
+  if (denied) return denied;
   const now = new Date();
   const dev = c.get('device');
   const pepper = c.env.PEPPER ?? '';
@@ -71,6 +78,7 @@ deviceRoutes.post('/devices/recovery-codes', auth, ownerOnly, async (c) => {
          VALUES ${hashes.map((_, i) => `(?${i + 4}, ?1, 'owner', 'recovery', ?2, ?3, NULL)`).join(', ')}`,
       )
       .bind(dev.shop_id, dev.id, iso(now), ...hashes),
+    auditStatement(db, now, { shopId: dev.shop_id, actorDeviceId: dev.id, actorUserId: dev.user_id, action: 'recovery_codes.mint', detail: { count } }),
   ]);
   return c.json<RecoveryCodesResponse>({ codes, ...envelope(c, now) });
 });
@@ -93,12 +101,14 @@ deviceRoutes.get('/devices', auth, ownerOnly, async (c) => {
   return c.json<DevicesResponse>({ devices, ...envelope(c, now) });
 });
 
-deviceRoutes.post('/devices/:id/revoke', auth, ownerOnly, async (c) => {
+deviceRoutes.post('/devices/:id/revoke', auth, ownerOnly, noWeb, async (c) => {
   const body = await readJson(c);
   if (!isObj(body) || (body.wipe !== undefined && typeof body.wipe !== 'boolean')) return badRequest(c, 'wipe');
   const id = c.req.param('id');
   const dev = c.get('device');
   if (id === dev.id) return fail(c, 400, 'cannot_revoke_self');
+  const denied = await requireStepUp(c);
+  if (denied) return denied;
   const now = new Date();
   const db = c.env.DB;
   // Same transaction: the unused pair and recovery codes this device issued die with it, so a stolen phone cannot
@@ -117,6 +127,12 @@ deviceRoutes.post('/devices/:id/revoke', auth, ownerOnly, async (c) => {
            AND EXISTS (SELECT 1 FROM devices WHERE id = ?2 AND shop_id = ?1)`,
       )
       .bind(dev.shop_id, id),
+    db
+      .prepare(
+        `INSERT INTO auth_events (id, shop_id, at, actor_device_id, actor_user_id, action, target_user_id, target_device_id, detail)
+         SELECT ?1, ?2, ?3, ?4, ?5, 'device.revoke', user_id, id, ?6 FROM devices WHERE id = ?7 AND shop_id = ?2`,
+      )
+      .bind(crypto.randomUUID(), dev.shop_id, iso(now), dev.id, dev.user_id, JSON.stringify({ wipe: body.wipe === true }), id),
   ]);
   if (!upd?.results?.length) return fail(c, 404, 'not_found');
   return c.json<OkResponse>({ ok: true, ...envelope(c, now) });

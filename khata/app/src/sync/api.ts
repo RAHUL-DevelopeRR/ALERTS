@@ -3,32 +3,51 @@
  *
  * - Base URL: trimmed, trailing slashes and a trailing "/v1" stripped, https:// added when no scheme is given.
  *   Plain http:// is accepted only for LAN/localhost development hosts (wrangler dev on the shop Wi-Fi).
- * - JSON in and out; `Authorization: Bearer <token>` on every authenticated route.
+ * - JSON in and out; `Authorization: Bearer <token>` on every authenticated route (mode 'bearer': Android, v1 pairing).
+ * - Mode 'cookie' (the web app, `__WEB_APP__`): same-origin relative URLs (baseUrl ''), `credentials: 'same-origin'`,
+ *   the header `X-KK-Client: web` on every request, NO Authorization header and no token anywhere in storage: the
+ *   session is the HttpOnly kk_session cookie the server set at login.
  * - 20 s timeout. AbortController aborts the WebView fetch; a timer race also covers CapacitorHttp's patched
  *   fetch, whose native POST path ignores `signal` (node_modules/@capacitor/android/.../native-bridge.js).
  * - Every failure becomes a SyncError (see `ApiFailure` for the extra HTTP details).
  */
 import {
   API_VERSION,
+  KNOWN_DEVICE_HEADER,
   PULL_PAGE_SIZE,
+  RECOVERY_HEADER,
+  STEPUP_HEADER,
+  WEB_CLIENT_HEADER,
   type ApiError,
+  type AuthEventsResponse,
   type CodeBlockRequest,
   type CodeBlockResponse,
+  type ConfigResponse,
+  type CreateUserRequest,
   type DevicesResponse,
   type EraseResponse,
+  type GoogleLoginRequest,
+  type LoginRequest,
+  type LoginResponse,
   type MeResponse,
+  type NonceResponse,
   type OkResponse,
   type PairCodeResponse,
   type PairRequest,
   type PairResponse,
+  type PreloginResponse,
   type PullResponse,
   type PushRequest,
   type PushResponse,
   type RecoveryCodesResponse,
   type Role,
+  type SetPasswordRequest,
   type SetupResponse,
   type ShopUpdateRequest,
   type ShopUpdateResponse,
+  type UpdateUserRequest,
+  type UserResponse,
+  type UsersResponse,
 } from '../../../shared/protocol';
 import { asciiDigits } from '../core/ledger';
 import { SyncError } from './types';
@@ -42,11 +61,32 @@ export class ApiFailure extends SyncError {
     public readonly status: number,
     public readonly wipe: boolean = false,
     message?: string,
+    /** The parsed error body (v2: `stepup` list on stepup_required, `retry_after` on locked), or null. */
+    public readonly body: Partial<ApiError> | null = null,
   ) {
     super(code, message);
     this.name = 'ApiFailure';
   }
 }
+
+/**
+ * Proof for an owner-power call (shared/protocol.ts "Step-up"): the caller's CURRENT client_key (derived from the
+ * password with the prelogin salt) or a printed recovery code. Sent once; the server keeps the device stepped up for
+ * STEPUP_WINDOW_MIN minutes.
+ */
+export type StepUpProof = { kind: 'password'; client_key: string } | { kind: 'recovery'; code: string };
+
+function proofHeaders(proof?: StepUpProof | null): Record<string, string> {
+  if (!proof) return {};
+  return proof.kind === 'password' ? { [STEPUP_HEADER]: proof.client_key } : { [RECOVERY_HEADER]: proof.code };
+}
+
+/** Server error codes passed through to the client unchanged (every other 4xx keeps the v1 mapping). */
+const PASSTHROUGH_ERRORS: ReadonlySet<string> = new Set([
+  'invalid_login', 'web_owner_only', 'web_forbidden', 'stepup_required', 'stepup_invalid', 'not_linked',
+  'invalid_token', 'csrf', 'locked', 'username_taken', 'google_email_taken', 'last_owner', 'already_linked',
+  'cannot_change_own_role', 'cannot_disable_self', 'unavailable',
+]);
 
 /** Error codes that mean "this phone's token is no longer valid". */
 export const AUTH_ERRORS: ReadonlySet<string> = new Set(['revoked', 'unauthorized']);
@@ -107,6 +147,8 @@ export interface ApiClientOptions {
   timeoutMs?: number;
   setTimeout?: (fn: () => void, ms: number) => unknown;
   clearTimeout?: (handle: unknown) => void;
+  /** 'bearer' (default: Android, paired phones) or 'cookie' (the web app; see the module comment). */
+  mode?: 'bearer' | 'cookie';
 }
 
 type Method = 'GET' | 'POST' | 'PUT';
@@ -131,12 +173,17 @@ export function errorCodeFor(status: number, body: Partial<ApiError> | null, pat
   const isSetup = path === '/setup';
   const isPair = path === '/pair';
   if (status === 401) return err === 'revoked' ? 'revoked' : 'unauthorized';
+  if (status !== 401 && status < 500 && PASSTHROUGH_ERRORS.has(err)) return err;
   if (status === 403) {
     if (isSetup) return 'bad_setup_key';
     if (err === 'invalid_code') return 'invalid_code';
     return 'forbidden';
   }
-  if (status === 404) return isSetup ? 'setup_disabled' : 'not_found';
+  if (status === 404) {
+    if (isSetup) return 'setup_disabled';
+    if (path === '/auth/google' || path === '/auth/nonce') return 'google_off';
+    return 'not_found';
+  }
   if (status === 413) return 'too_many_rows';
   if (status === 429) {
     if (err === 'daily_cap' || err === 'throttled') return err;
@@ -153,9 +200,10 @@ export class ApiClient {
   private readonly timeoutMs: number;
   private readonly setT: (fn: () => void, ms: number) => unknown;
   private readonly clearT: (handle: unknown) => void;
+  readonly mode: 'bearer' | 'cookie';
 
   constructor(
-    /** Already normalised with normalizeServerUrl(). */
+    /** Already normalised with normalizeServerUrl(); '' in cookie mode (same-origin relative URLs). */
     readonly baseUrl: string,
     private readonly getToken: () => Promise<string | null>,
     opts: ApiClientOptions = {},
@@ -165,6 +213,7 @@ export class ApiClient {
     this.timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS;
     this.setT = opts.setTimeout ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearT = opts.clearTimeout ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+    this.mode = opts.mode ?? 'bearer';
   }
 
   url(path: string): string {
@@ -174,7 +223,10 @@ export class ApiClient {
   private async call<T>(method: Method, path: string, o: CallOpts = {}): Promise<T> {
     const headers: Record<string, string> = { Accept: 'application/json', ...(o.headers ?? {}) };
     if (o.body !== undefined) headers['Content-Type'] = 'application/json';
-    if (o.auth !== false) {
+    // Cookie mode: the CSRF header goes on every request (the server demands it with the cookie) and the session
+    // cookie is attached by the browser; no token is ever read or sent.
+    if (this.mode === 'cookie') headers[WEB_CLIENT_HEADER] = 'web';
+    if (o.auth !== false && this.mode === 'bearer') {
       let token: string | null = null;
       try {
         token = await this.getToken();
@@ -208,6 +260,7 @@ export class ApiClient {
             headers,
             body: o.body === undefined ? undefined : JSON.stringify(o.body),
             signal: ctrl?.signal,
+            ...(this.mode === 'cookie' ? { credentials: 'same-origin' as const } : {}),
           }),
           timeout,
         ]);
@@ -231,7 +284,7 @@ export class ApiClient {
           body = null;
         }
         const code = errorCodeFor(res.status, body, path);
-        throw new ApiFailure(code, res.status, res.status === 401 && body?.wipe === true, body?.message ?? body?.error ?? `HTTP ${res.status}`);
+        throw new ApiFailure(code, res.status, res.status === 401 && body?.wipe === true, body?.message ?? body?.error ?? `HTTP ${res.status}`, body);
       }
       if (o.text) return text as unknown as T;
       try {
@@ -275,20 +328,96 @@ export class ApiClient {
       typeof v.token === 'string' && typeof v.device_id === 'string' && isObj(v.shop) && isObj(v.code_block));
   }
 
+  // ---------------------------------------------------------------- v2 accounts (public)
+
+  /** GET /config: what the login screen should offer (Google button only when google_client_id is a string). */
+  async config(): Promise<ConfigResponse> {
+    const r = await this.call<ConfigResponse>('GET', '/config', { auth: false });
+    if (!isObj(r) || typeof r.version !== 'string') throw new ApiFailure('server', 200, false, 'unexpected response');
+    return { ...r, google_client_id: typeof r.google_client_id === 'string' && r.google_client_id ? r.google_client_id : null };
+  }
+
+  /** POST /auth/prelogin: the PBKDF2 salt + iterations for a username (fake for unknown users; same shape). */
+  async prelogin(username: string): Promise<PreloginResponse> {
+    const r = await this.call<PreloginResponse>('POST', '/auth/prelogin', { auth: false, body: { username } });
+    if (!isObj(r) || typeof r.salt !== 'string' || typeof r.iterations !== 'number') {
+      throw new ApiFailure('server', 200, false, 'unexpected response');
+    }
+    return r;
+  }
+
+  /** POST /auth/login. `knownDevice` (Android: the value stored at the last login) exempts this client from the throttles. */
+  async login(req: LoginRequest, knownDevice?: string | null): Promise<LoginResponse> {
+    const r = await this.call<LoginResponse>('POST', '/auth/login', {
+      auth: false,
+      body: req,
+      headers: knownDevice ? { [KNOWN_DEVICE_HEADER]: knownDevice } : {},
+    });
+    return this.checkedLogin(r);
+  }
+
+  /** POST /auth/nonce (404 -> 'google_off'). */
+  async nonce(): Promise<string> {
+    const r = await this.call<NonceResponse>('POST', '/auth/nonce', { auth: false, body: {} });
+    if (!isObj(r) || typeof r.nonce !== 'string') throw new ApiFailure('server', 200, false, 'unexpected response');
+    return r.nonce;
+  }
+
+  /** POST /auth/google with a Google Identity Services credential whose nonce claim came from nonce(). */
+  async googleLogin(req: GoogleLoginRequest): Promise<LoginResponse> {
+    return this.checkedLogin(await this.call<LoginResponse>('POST', '/auth/google', { auth: false, body: req }));
+  }
+
+  private checkedLogin(r: LoginResponse): LoginResponse {
+    return this.checked(r, (v) =>
+      (typeof v.token === 'string' || v.token === null) && typeof v.device_id === 'string' && isObj(v.shop)
+      && (v.code_block === null || isObj(v.code_block)) && isObj(v.user) && typeof v.known_device === 'string');
+  }
+
   // ---------------------------------------------------------------- authenticated routes
+
+  /** POST /auth/logout: revokes this session (and clears the web cookie). */
+  async logout(): Promise<OkResponse> {
+    return this.checked(await this.call<OkResponse>('POST', '/auth/logout', { body: {} }));
+  }
+
+  async users(): Promise<UsersResponse> {
+    return this.checked(await this.call<UsersResponse>('GET', '/users'), (v) => Array.isArray(v.users));
+  }
+
+  async createUser(req: CreateUserRequest, proof?: StepUpProof | null): Promise<UserResponse> {
+    return this.checked(await this.call<UserResponse>('POST', '/users', { body: req, headers: proofHeaders(proof) }), (v) => isObj(v.user));
+  }
+
+  async updateUser(id: string, patch: UpdateUserRequest, proof?: StepUpProof | null): Promise<UserResponse> {
+    return this.checked(
+      await this.call<UserResponse>('PUT', `/users/${encodeURIComponent(id)}`, { body: patch, headers: proofHeaders(proof) }),
+      (v) => isObj(v.user),
+    );
+  }
+
+  async setPassword(id: string, req: SetPasswordRequest, proof?: StepUpProof | null): Promise<OkResponse> {
+    return this.checked(
+      await this.call<OkResponse>('PUT', `/users/${encodeURIComponent(id)}/password`, { body: req, headers: proofHeaders(proof) }),
+    );
+  }
+
+  async authEvents(): Promise<AuthEventsResponse> {
+    return this.checked(await this.call<AuthEventsResponse>('GET', '/auth/events'), (v) => Array.isArray(v.events));
+  }
 
   async me(): Promise<MeResponse> {
     return this.checked(await this.call<MeResponse>('GET', '/me'));
   }
 
-  async pairCode(role: Role): Promise<PairCodeResponse> {
-    return this.checked(await this.call<PairCodeResponse>('POST', '/devices/pair-code', { body: { role } }),
+  async pairCode(role: Role, proof?: StepUpProof | null): Promise<PairCodeResponse> {
+    return this.checked(await this.call<PairCodeResponse>('POST', '/devices/pair-code', { body: { role }, headers: proofHeaders(proof) }),
       (v) => typeof v.code === 'string');
   }
 
-  async recoveryCodes(count?: number): Promise<RecoveryCodesResponse> {
+  async recoveryCodes(count?: number, proof?: StepUpProof | null): Promise<RecoveryCodesResponse> {
     return this.checked(
-      await this.call<RecoveryCodesResponse>('POST', '/devices/recovery-codes', { body: count === undefined ? {} : { count } }),
+      await this.call<RecoveryCodesResponse>('POST', '/devices/recovery-codes', { body: count === undefined ? {} : { count }, headers: proofHeaders(proof) }),
       (v) => Array.isArray(v.codes),
     );
   }
@@ -302,8 +431,10 @@ export class ApiClient {
     return this.checked(await this.call<DevicesResponse>('GET', '/devices'), (v) => Array.isArray(v.devices));
   }
 
-  async revoke(id: string, wipe: boolean): Promise<OkResponse> {
-    return this.checked(await this.call<OkResponse>('POST', `/devices/${encodeURIComponent(id)}/revoke`, { body: { wipe } }));
+  async revoke(id: string, wipe: boolean, proof?: StepUpProof | null): Promise<OkResponse> {
+    return this.checked(
+      await this.call<OkResponse>('POST', `/devices/${encodeURIComponent(id)}/revoke`, { body: { wipe }, headers: proofHeaders(proof) }),
+    );
   }
 
   async updateShop(patch: ShopUpdateRequest): Promise<ShopUpdateResponse> {

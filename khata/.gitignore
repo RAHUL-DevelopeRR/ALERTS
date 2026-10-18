@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# Web app build (served by the Worker as static assets; built by tools/deploy-server.sh)
+app/dist-web/
 .wrangler/
 .dev.vars
 *.log

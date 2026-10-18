@@ -1,10 +1,4 @@
-import {
-  CLIENT_KEY_BYTES,
-  PBKDF2_MAX_ITERATIONS,
-  PBKDF2_MIN_ITERATIONS,
-  PW_SALT_BYTES,
-  USERNAME_RE,
-} from '../../../shared/protocol';
+import { CLIENT_KEY_BYTES, PBKDF2_DEFAULT_ITERATIONS, PW_SALT_BYTES, USERNAME_RE } from '../../../shared/protocol';
 import { base64url, constantTimeEqual, fromBase64url, hmacSha256, toHex } from './crypto';
 
 /**
@@ -58,33 +52,37 @@ export interface PasswordMaterial {
 
 /**
  * Validates {salt, iterations, client_key}. Returns the material, null when all three are absent, or the name of the
- * first bad field.
+ * first bad field. Only PBKDF2_DEFAULT_ITERATIONS is accepted: the server stores one count for everyone, so a weak
+ * client cannot register a cheap verifier and prelogin never has a per-user count to reveal.
  */
 export function parsePasswordSet(body: Record<string, unknown>): PasswordMaterial | null | string {
   const { salt, iterations, client_key } = body;
   if (salt === undefined && iterations === undefined && client_key === undefined) return null;
   if (!fromBase64url(salt, PW_SALT_BYTES)) return 'salt';
-  if (
-    typeof iterations !== 'number' ||
-    !Number.isSafeInteger(iterations) ||
-    iterations < PBKDF2_MIN_ITERATIONS ||
-    iterations > PBKDF2_MAX_ITERATIONS
-  ) {
-    return 'iterations';
-  }
+  if (iterations !== PBKDF2_DEFAULT_ITERATIONS) return 'iterations';
   const clientKey = parseClientKey(client_key);
   if (!clientKey) return 'client_key';
   return { salt: salt as string, iterations, clientKey };
 }
 
 
-/** Lower-cased Google address, null for null, undefined when absent, 'invalid' otherwise. */
-export function parseEmail(v: unknown): string | null | undefined | 'invalid' {
+/** Domains whose addresses may be pre-registered as google_email (plus the GOOGLE_HD var, if set). */
+const GOOGLE_DOMAINS: ReadonlySet<string> = new Set(['gmail.com', 'googlemail.com']);
+
+/**
+ * Lower-cased Google address, null for null, undefined when absent, 'invalid' for a malformed value and
+ * 'google_email_domain' for an address outside gmail.com / googlemail.com / `hd` (a Yahoo or Rediffmail address can
+ * be registered as a Google account by someone else: email pre-registration is only safe for Google-owned domains).
+ */
+export function parseEmail(v: unknown, hd?: string): string | null | undefined | 'invalid' | 'google_email_domain' {
   if (v === undefined) return undefined;
   if (v === null) return null;
   if (typeof v !== 'string') return 'invalid';
   const e = v.trim().toLowerCase();
   if (e.length < 3 || e.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return 'invalid';
+  const domain = e.slice(e.lastIndexOf('@') + 1);
+  const allowed = (hd ?? '').trim().toLowerCase();
+  if (!GOOGLE_DOMAINS.has(domain) && !(allowed && domain === allowed)) return 'google_email_domain';
   return e;
 }
 
@@ -94,8 +92,3 @@ export function parseDisplayName(v: unknown): string | null {
   const t = v.trim();
   return t.length >= 1 && t.length <= 60 ? t : null;
 }
-
-/** Backoff after the 5th consecutive failure: 30 s doubling up to 15 min (SQL fragment needs ?now bound). */
-export const LOCK_AFTER = 5;
-export const LOCK_BASE_S = 30;
-export const LOCK_MAX_S = 900;

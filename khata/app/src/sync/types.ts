@@ -2,7 +2,7 @@
  * Sync engine contract (src/sync/engine.ts implements it; get it with `syncEngine()` from src/sync/index.ts).
  * The engine is optional: an unpaired phone works fully offline and never calls the network.
  */
-import type { Role, DeviceInfo, ShopInfo } from '../../../shared/protocol';
+import type { AuthEvent, ClientKind, ConfigResponse, Role, DeviceInfo, ShopInfo, UserInfo, UserSummary } from '../../../shared/protocol';
 
 export type SyncPhase = 'unpaired' | 'idle' | 'syncing' | 'offline' | 'error' | 'revoked';
 
@@ -49,10 +49,67 @@ export interface SyncEngine {
   downloadServerExport(): Promise<string>;
   /** Forget the server on this phone (keeps local data). */
   disconnect(): Promise<void>;
+
+  /** Re-read counts, resting phase and the account from the repo / private file (once at app start). */
+  refreshStatus(): Promise<SyncStatus>;
+  /** Rows that had not reached the server when the last 401 arrived (the web shows it before wiping). */
+  readonly lastRevokedPending: number;
+
+  // ---- v2 accounts (see engine.ts "v2: accounts")
+  /** The signed-in account (null: unpaired, or a v1 paired phone without a login). Loaded by refreshStatus(). */
+  getAccount(): AccountInfo | null;
+  /** Installs the UI that asks for the owner's password / a recovery code when a call needs step-up. */
+  setStepUpProvider(fn: StepUpProvider | null): void;
+  config(serverUrl: string): Promise<ConfigResponse>;
+  nonce(serverUrl: string): Promise<string>;
+  /** prelogin -> PBKDF2 -> /auth/login -> completePairing -> first sync. Throws SyncError (invalid_login, locked, ...). */
+  login(serverUrl: string, username: string, password: string, deviceName: string, opts?: { shared?: boolean; onProgress?: (p: LoginProgress) => void }): Promise<AccountInfo>;
+  googleLogin(serverUrl: string, idToken: string, deviceName: string, opts?: { shared?: boolean }): Promise<AccountInfo>;
+  /** Web only: rebuild the local pairing from a still-valid cookie session (GET /me). */
+  resumeWebSession(serverUrl: string): Promise<boolean>;
+  logout(opts: { removeData: boolean; force?: boolean }): Promise<void>;
+  /** Web only: fetch a customer-code block when none is left. */
+  requestCodes(): Promise<void>;
+  listUsers(): Promise<UserInfo[]>;
+  createUser(input: NewUserInput): Promise<UserInfo>;
+  updateUser(id: string, patch: { display_name?: string; role?: Role; google_email?: string | null; disabled?: boolean }): Promise<UserInfo>;
+  resetPassword(id: string, newPassword: string): Promise<void>;
+  changeOwnPassword(currentPassword: string, newPassword: string): Promise<void>;
+  authEvents(): Promise<AuthEvent[]>;
 }
 
+/** The signed-in account as kept on this device (never a credential). */
+export interface AccountInfo {
+  user: UserSummary;
+  client: ClientKind;
+  /** When the web session ends (null for Android / when unknown). */
+  expires_at: string | null;
+  signed_in_at: string;
+}
+
+export type LoginProgress = 'prelogin' | 'deriving' | 'login';
+
+export interface NewUserInput {
+  username: string;
+  display_name: string;
+  role: Role;
+  /** Omit for a Google-only user (then google_email is required). */
+  password?: string | null;
+  google_email?: string | null;
+  /** Attach THIS paired owner phone to the new owner user (bootstrap). */
+  link_me?: boolean;
+}
+
+export type StepUpAnswer = { kind: 'password'; password: string } | { kind: 'recovery'; code: string };
+
+/** Asked once per attempt; `can` lists what the server accepts; return null to cancel. */
+export type StepUpProvider = (req: { can: Array<'password' | 'recovery'>; retry: boolean; attempt: number }) => Promise<StepUpAnswer | null>;
+
 /** Errors thrown by pairing/owner calls: `new SyncError(code)`. Codes: invalid_code, throttled, network,
- *  bad_url, forbidden, unauthorized, revoked, server, setup_disabled, bad_setup_key, daily_cap. */
+ *  bad_url, forbidden, unauthorized, revoked, server, setup_disabled, bad_setup_key, daily_cap; v2: invalid_login,
+ *  locked, web_owner_only, web_forbidden, stepup_required, stepup_invalid, not_linked, invalid_token, google_off,
+ *  username_taken, google_email_taken, last_owner, already_linked, cannot_change_own_role, cannot_disable_self,
+ *  password_short, bad_username, cancelled, web_offline. */
 export class SyncError extends Error {
   constructor(public code: string, message?: string) {
     super(message ?? code);

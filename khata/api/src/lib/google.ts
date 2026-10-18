@@ -125,6 +125,8 @@ export interface GoogleIdentity {
   sub: string;
   email: string;
   name: string | null;
+  /** The `nonce` claim as sent (checked by the route against POST /auth/nonce), or null. */
+  nonce: string | null;
 }
 
 export type GoogleVerifyError = 'malformed' | 'alg' | 'kid' | 'signature' | 'iss' | 'aud' | 'expired' | 'iat' | 'email';
@@ -185,11 +187,12 @@ export async function verifyGoogleIdToken(
       sub: payload.sub,
       email: payload.email.trim().toLowerCase(),
       name: typeof payload.name === 'string' ? payload.name.slice(0, 60) : null,
+      nonce: typeof payload.nonce === 'string' && payload.nonce.length <= 200 ? payload.nonce : null,
     },
   };
 }
 
-/** GOOGLE_CLIENT_IDS var -> list (empty = Google sign-in off). */
+/** GOOGLE_CLIENT_IDS / GOOGLE_ANDROID_CLIENT_IDS var -> list (empty = Google sign-in off for that client kind). */
 export function googleAudiences(v: string | undefined): string[] {
   return (v ?? '')
     .split(',')

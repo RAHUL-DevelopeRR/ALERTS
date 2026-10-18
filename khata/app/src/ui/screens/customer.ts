@@ -11,6 +11,8 @@ import { errorText } from '../errors';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { reminderText } from '../statement-text';
+import { micHeaderButton } from '../voice/mic-button';
+import { loadVoicePrefs } from '../voice/prefs';
 
 /** Per-session toggle, shared by all customers. */
 let showCorrections = false;
@@ -18,13 +20,15 @@ let showCorrections = false;
 export const customerScreen: Screen = async (root, route) => {
   const id = route.params.id;
   const s = await refreshSettings();
-  const [c, rows] = await Promise.all([app.repo.getCustomer(id), app.repo.listEntries(id)]);
+  const [c, rows] = await Promise.all([app.repo.getCustomer(id), app.repo.listEntries(id), loadVoicePrefs()]);
   if (!c) throw new Error('NOT_FOUND');
   const balance = rows.length ? rows[rows.length - 1].running_paise : 0;
   const owner = s.role === 'owner';
 
   const more = iconButton('more', t('common.more'), () => openMenu(c, balance, owner));
-  const { body, footer } = shell(root, { title: c.name, sub: formatCode(c.code), back: true, actions: [more] });
+  // Voice entry on this customer's page: "100 kattinaan" (no name) means this customer (ui/voice, finding 9).
+  const mic = c.erased_at ? null : micHeaderButton({ contextCustomerId: c.id }, 'mic-customer');
+  const { body, footer } = shell(root, { title: c.name, sub: formatCode(c.code), back: true, actions: mic ? [mic, more] : [more] });
 
   // ---- notes
   if (c.erased_at) body.appendChild(h('div', { class: 'note-box', text: t('det.erasedNote') }));

@@ -2,6 +2,7 @@
  * Add / edit customer: name (required), mobile (optional, duplicate warning), note. "Save & add credit" first.
  * From quick entry (params.quick = '1'): saving goes straight to the keypad in quick mode, which returns to the
  * quick list, so the sitting (count, sticky date) carries on.
+ * From voice entry (state.voice, an unknown name): saving opens the keypad prefilled with what was heard.
  */
 import { cleanName, formatCode, formatPhone, normalizePhone, normName } from '../../core/ledger';
 import type { Customer } from '../../data/types';
@@ -15,12 +16,21 @@ import { quick } from '../quick-session';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { rowDetail } from './home';
+import type { VoicePrefill } from '../voice/prefill';
 
 export const customerEditScreen: Screen = async (root, route) => {
   const id = route.params.id;
   const existing = id ? await app.repo.getCustomer(id) : null;
   if (id && !existing) throw new Error('NOT_FOUND');
   const fromQuick = !existing && route.params.quick === '1' && quick.active;
+  const voice = existing ? null : ((route.state as { voice?: VoicePrefill } | undefined)?.voice ?? null);
+  /** Keypad route for the voice prefill (direction left unset when the parser could not tell). */
+  const voiceEntry = (customerId: string): [Record<string, string>, { voice: VoicePrefill }] => {
+    const params: Record<string, string> = { id: customerId };
+    if (voice?.kind) params.kind = voice.kind;
+    if (fromQuick) params.quick = '1';
+    return [params, { voice: voice! }];
+  };
   const { body, footer } = shell(root, { title: existing ? t('cust.edit') : t('cust.new'), back: true });
 
   const nameIn = h('input', { class: 'input', attrs: { type: 'text', placeholder: t('cust.namePh'), autocomplete: 'off', autocapitalize: 'words', maxlength: 100, enterkeyhint: 'next', 'data-testid': 'cust-name' } });
@@ -118,7 +128,8 @@ export const customerEditScreen: Screen = async (root, route) => {
           const choice = await sameNameDialog(same);
           if (choice === null) return;
           if (choice !== 'new') {
-            if (fromQuick) await router.replace('entry', { id: choice, kind: 'GIVE', quick: '1' });
+            if (voice) await router.replace('entry', ...voiceEntry(choice));
+            else if (fromQuick) await router.replace('entry', { id: choice, kind: 'GIVE', quick: '1' });
             else await router.replace('customer', { id: choice });
             return;
           }
@@ -134,6 +145,11 @@ export const customerEditScreen: Screen = async (root, route) => {
       const c = await app.repo.createCustomer({ name, phone, note: noteIn.value });
       afterWrite();
       toast(t('cust.savedAs', { code: formatCode(c.code) }));
+      if (voice) {
+        if (!fromQuick) await router.replace('customer', { id: c.id });
+        await (fromQuick ? router.replace('entry', ...voiceEntry(c.id)) : router.go('entry', ...voiceEntry(c.id)));
+        return;
+      }
       if (fromQuick) {
         // Back to the quick list on plain Save; straight to the quick keypad on "Save + credit".
         if (thenCredit) await router.replace('entry', { id: c.id, kind: 'GIVE', quick: '1' });

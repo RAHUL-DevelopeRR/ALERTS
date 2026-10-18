@@ -17,7 +17,7 @@ app.use(
   '/v1/*',
   cors({
     origin: ['https://localhost', 'http://localhost', 'capacitor://localhost'],
-    allowHeaders: ['Authorization', 'Content-Type', 'X-Setup-Key'],
+    allowHeaders: ['Authorization', 'Content-Type', 'X-Setup-Key', 'X-KK-Client', 'X-KK-Stepup', 'X-KK-Recovery', 'X-KK-Known'],
     allowMethods: ['GET', 'POST', 'PUT', 'OPTIONS'],
     maxAge: 86400,
   }),

@@ -67,8 +67,14 @@ export async function owner(extra: { max_local_code?: number; device_name?: stri
   return r.body;
 }
 
-export async function addDevice(ownerToken: string, role: 'owner' | 'staff', name = 'Helper phone'): Promise<PairResponse> {
-  const pc = await call('POST', '/devices/pair-code', { token: ownerToken, body: { role } });
+/** Owner mints a pair code and a new phone claims it. `headers` carries a step-up proof when the owner device needs one. */
+export async function addDevice(
+  ownerToken: string,
+  role: 'owner' | 'staff',
+  name = 'Helper phone',
+  headers?: Record<string, string>,
+): Promise<PairResponse> {
+  const pc = await call('POST', '/devices/pair-code', { token: ownerToken, headers, body: { role } });
   if (pc.status !== 200) throw new Error(`pair-code failed ${pc.status}`);
   const r = await pair(pc.body.code, { device_name: name });
   if (r.status !== 200) throw new Error(`pair failed ${r.status} ${JSON.stringify(r.body)}`);

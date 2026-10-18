@@ -5,6 +5,7 @@ import { app } from '../app';
 import * as router from '../router';
 import { when } from '../format';
 import { clear, h, icon, type IconName } from './dom';
+import { isWebApp } from '../web/flag';
 
 export function pillContent(s: SyncStatus): { text: string; icon: IconName; tone: '' | 'warn' | 'bad' } {
   switch (s.phase) {
@@ -21,6 +22,8 @@ export function pillContent(s: SyncStatus): { text: string; icon: IconName; tone
     case 'idle':
     default:
       if (s.pending > 0) return { text: t('sync.pending', { n: s.pending }), icon: 'cloud', tone: 'warn' };
+      // The web app is never the ledger of record: it shows a copy of the server's ledger.
+      if (isWebApp()) return { text: t('web.onlineCopy'), icon: 'cloud', tone: '' };
       if (s.last_sync_at) return { text: t('sync.idle', { time: when(s.last_sync_at) }), icon: 'check', tone: '' };
       return { text: t('sync.idleNever'), icon: 'check', tone: '' };
   }

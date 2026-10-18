@@ -9,7 +9,8 @@ import { createNativePlatform } from './native';
 import type { Platform } from './types';
 import { createWebPlatform } from './web';
 
-export type { Platform } from './types';
+export type { Platform, Speech, SpeechLang, SpeechListenOptions } from './types';
+export { SPEECH_PRIVACY_NOTE } from './speech-common';
 
 let instance: Platform | null = null;
 

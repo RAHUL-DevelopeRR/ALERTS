@@ -14,7 +14,15 @@
  *     number runs, split the utterance into entries;
  *  4. per entry: pick the amount, resolve the direction from cues (+ dative on the name, + shop setting),
  *     score customers, compute confidence;
- *  5. score every alternative, keep the best, and blank the direction when close alternatives disagree on it.
+ *  5. score every alternative, keep the best, and blank the direction when close alternatives disagree on it
+ *     (or when it rests only on a dative suffix that another alternative did not hear); when alternatives
+ *     disagree on the amount, list the other values in `amount_alternatives` and cap confidence at 'medium'.
+ *
+ * Direction safety: `confidence: 'high'` needs exactly one clearly best customer (or the page's customer), a
+ * parsed amount that no alternative disputes, and an explicit verb or label. A bare "kuduthaachu" (shop
+ * setting), a dative-only reading, a fuzzy-matched verb, a mixed vote or an item-only guess never reach 'high'.
+ * The app's own labels பற்று / வரவு and 'patru' / 'pattru' / 'varavu' are matched on the raw NFC text, never
+ * folded: பற்று folds to 'paru', which is also பாரு / 'paaru' ("look"), a common filler (plan finding 21).
  *
  * LLM seam: a later build may send low-confidence intents to a server interpreter (plan 2.6). That hook belongs
  * in the UI layer (see `needsHelp()` below); this module never does I/O.
@@ -59,7 +67,10 @@ export interface VoiceIntent {
   amount_paise: number | null;
   /** null = direction unclear (UI must ask). */
   kind: 'GIVE' | 'RECEIVE' | null;
-  /** e.g. 'verb:kuduthaachu+no-dative', 'verb:vaanginaan', 'conflict:alternatives'. */
+  /**
+   * Why: 'verb:kattinaan', 'bare-kuduthaachu' (shop setting decided it), 'verb:kuduthaachu+dative', 'dative',
+   * 'label:debit', 'conflict:alternatives(...)', 'conflict:dative(...)', 'inherited:...', 'negated:...'.
+   */
   kind_reason: string | null;
   /** Item words like "arisi", "paal" (and quantities such as "2 kilo"), as heard. */
   note: string | null;
@@ -67,6 +78,10 @@ export interface VoiceIntent {
   // ---- optional extras (additive; the UI may ignore them)
   /** Index of the alternative used. */
   alt_index?: number;
+  /** The words or digits amount_paise came from, as heard ("ஐநூறு", "1,500", "two fifty"). Set with amount_paise. */
+  amount_text?: string;
+  /** Other alternatives heard a different amount for this entry (paise, distinct). Confidence is then at most 'medium'. */
+  amount_alternatives?: number[];
   /** More than one possible amount was heard (amount_paise is then null); values in paise. */
   amount_candidates?: number[];
   /** "nethu" / yesterday -> -1, "munthaanethu" -> -2, "inniku" / today -> 0. Absent when not said. */
@@ -75,10 +90,20 @@ export interface VoiceIntent {
   mode?: 'UPI';
   /** "Ramu baaki evvalavu" / "how much": a balance question, not an entry. */
   balance_query?: boolean;
+  /**
+   * With opts.contextCustomerId: true when the page's customer was kept (no name spoken, or the spoken name fits
+   * it within 0.10 of the best match); false when another customer clearly won or the name does not fit the
+   * page's customer at all (matches then lists the candidates and the UI must ask).
+   */
+  context_kept?: boolean;
 }
 
 export interface ParseOptions {
-  /** On a customer's own page: the customer is fixed, so a missing name is not a weakness. */
+  /**
+   * On a customer's own page. A missing name means this customer; a spoken name keeps this customer while it
+   * scores within 0.10 of the best match (same-name customers in particular), and other candidates are returned
+   * only when one beats it by 0.10 or more or the name does not fit the page's customer at all.
+   */
   contextCustomerId?: string;
 }
 
@@ -156,6 +181,11 @@ interface Cue {
   forms: string[];
   /** English forms: looked up raw (lower-case) only, never folded. */
   en?: boolean;
+  /**
+   * App labels in either script: matched on the raw NFC string only, never folded and never fuzzy. பற்று folds
+   * to 'paru', the same as பாரு / 'paaru' ("look"), so the folded form must never become a cue.
+   */
+  raw?: boolean;
 }
 
 const R = 'RECEIVE' as const;
@@ -204,7 +234,8 @@ export const CUES: Cue[] = [
   { label: 'enakku', type: 'shop', dir: R, forms: [
     'எனக்கு', 'நமக்கு', 'எங்களுக்கு', 'கடைக்கு', 'enakku', 'enaku', 'namakku', 'engalukku', 'kadaikku', 'kadaiku',
   ] },
-  { label: 'varavu', type: 'label', dir: R, forms: ['வரவு', 'ஜமா', 'varavu', 'varavu', 'jama', 'jamaa'] },
+  { label: 'varavu', type: 'label', dir: R, raw: true, forms: ['வரவு', 'varavu'] },
+  { label: 'varavu', type: 'label', dir: R, forms: ['ஜமா', 'jama', 'jamaa'] },
   // ---- English, raw
   { label: 'paid', type: 'verb', dir: R, en: true, forms: [
     'paid', 'pay', 'pays', 'payment', 'payed', 'received', 'receive', 'recieved', 'got', 'returned', 'return', 'repaid',
@@ -232,7 +263,9 @@ export const CUES: Cue[] = [
     'குடுத்தேன்', 'கொடுத்தேன்', 'குடுத்தோம்', 'கொடுத்தோம்', 'குடுத்திருக்கேன்', 'குடுத்துட்டேன்', 'கொடுத்துட்டோம்', 'குடுத்துருக்கேன்',
     'kuduthen', 'koduthen', 'kuduthom', 'koduthom', 'kuduthirukken', 'kuduthutten', 'kuduthuttom', 'kudutthen',
   ] },
-  { label: 'debit', type: 'label', dir: G, forms: ['பற்று', 'டெபிட்', 'patru', 'pattru', 'parru'] },
+  // raw only: 'parru' / பாரு / 'paaru' fold to 'paru' and must stay out of the lexicon (finding 21)
+  { label: 'debit', type: 'label', dir: G, raw: true, forms: ['பற்று', 'patru', 'pattru'] },
+  { label: 'debit', type: 'label', dir: G, forms: ['டெபிட்'] },
   { label: 'debit', type: 'label', dir: G, en: true, forms: ['debit', 'debited', 'debt'] },
   { label: 'took', type: 'verb', dir: G, en: true, forms: ['took', 'taken', 'bought', 'purchased', 'borrowed', 'buy', 'purchase'] },
   { label: 'gave', type: 'gave', dir: null, en: true, forms: ['gave', 'given', 'give', 'gives'] },
@@ -285,13 +318,18 @@ const CUE_PATTERNS: { re: RegExp; label: string; type: CueType; dir: 'GIVE' | 'R
 
 const RAW_CUE = new Map<string, Cue>();
 const FOLD_CUE = new Map<string, Cue>();
+/** Folded keys that must never be cues: 'paru' is பாரு / 'paaru' ("look") as much as பற்று. */
+const FORBIDDEN_FOLD_KEYS = new Set(['paru']);
 for (const c of CUES) {
   for (const f of c.forms) {
-    if (c.en) { RAW_CUE.set(f, c); continue; }
+    if (c.en || c.raw) { RAW_CUE.set(f.normalize('NFC').toLowerCase(), c); continue; }
     const k = foldWord(f);
-    if (k && !FOLD_CUE.has(k)) FOLD_CUE.set(k, c);
+    if (!k || FORBIDDEN_FOLD_KEYS.has(k)) continue;
+    if (!FOLD_CUE.has(k)) FOLD_CUE.set(k, c);
   }
 }
+/** The folded keys the lexicon registered (tests check that no false friend such as 'paru' is among them). */
+export const FOLDED_CUE_KEYS: ReadonlySet<string> = new Set(FOLD_CUE.keys());
 /** Verb keys (folded) for fuzzy matching of recogniser misspellings. */
 const FUZZY_CUE_KEYS = [...FOLD_CUE.entries()].filter(([k, c]) => k.length >= 5 && ['verb', 'kudu3p', 'bare', 'label'].includes(c.type));
 
@@ -348,6 +386,9 @@ const DATE_WORDS: { set: { fold: Set<string>; raw: Set<string> }; off: 0 | -1 | 
   { set: wordSet(['முந்தாநேத்து', 'munthaanethu', 'mundhaanethu', 'munthanethu'], []), off: -2 },
 ];
 const CODE_WORDS = wordSet(['சி', 'கோட்', 'kod'], ['c', 'code', 'si']);
+/** Honorifics that follow a name ("Ramu anna", "Sita akka-vukku"): skipped, but they may carry the name's dative. */
+const HONORIFICS = wordSet(['அண்ணா', 'அண்ணே', 'அக்கா', 'அம்மா', 'ஐயா', 'அய்யா', 'சார்', 'தம்பி', 'anna', 'annaa', 'anne', 'akka', 'amma', 'ayya', 'aiya', 'saar', 'thambi'], ['sir', 'madam', 'brother', 'bro']);
+const HONORIFIC_DATIVE = /^(.{2,}?)(வுக்கு|க்கு|உக்கு|னுக்கு|vukku|nukku|ukku|kku|ku)$/;
 const TO_WORDS = new Set(['to']);
 
 function inSet(s: { fold: Set<string>; raw: Set<string> }, raw: string, fold: string): boolean {
@@ -519,6 +560,8 @@ interface Tok {
   locative?: boolean;
   /** Also exactly a customer's first name (number word / noun colliding with a name: Anju, Kaasi). */
   alsoName?: boolean;
+  /** Honorific with a dative suffix ("akkavukku", "annanukku"): the name before it takes the dative. */
+  honorificDative?: boolean;
 }
 
 const TOKEN_RE = /(\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})+,\d{3}|\d+)(?:\.(\d+))?|₹|[\p{L}\p{M}]+(?:['’][sS]\b)?|[,.;!?\n|]|-/gu;
@@ -556,7 +599,7 @@ function classifyWord(surface: string, raw: string, fold: string): Omit<Tok, 'su
   if (atoms) return { type: 'numword', atoms };
   for (const p of CUE_PATTERNS) if (p.re.test(cfold)) return { type: 'cue', cue: { label: p.label, type: p.type, dir: p.dir } };
   // glued locative: "creditla", "kanakkula" handled above; "accountla"
-  const loc = /^(.{4,}?)(la|le|il)$/.exec(raw);
+  const loc = /^(.{4,}?)(la|le|il)$/.exec(raw) ?? /^(.{2,}?)(ல|லே|ல்|யில்)$/.exec(raw);
   if (loc) {
     const base = RAW_CUE.get(loc[1]) ?? FOLD_CUE.get(foldWord(loc[1]));
     if (base && (base.type === 'label' || base.type === 'account')) return { type: 'cue', cue: { label: base.label, type: base.type, dir: base.dir }, locative: true };
@@ -564,7 +607,21 @@ function classifyWord(surface: string, raw: string, fold: string): Omit<Tok, 'su
   // item with a dative/locative suffix ("arisikku")
   const itemBase = /^(.{3,}?)(uku|ku|la|il)$/.exec(fold);
   if (itemBase && ITEMS.fold.has(itemBase[1])) return { type: 'item' };
+  // honorific with a dative ("akkavukku", "அண்ணனுக்கு"): a stop word that marks the name as dative
+  const hd = HONORIFIC_DATIVE.exec(raw);
+  if (hd) {
+    const base = hd[1].replace(/ன$/, 'ன்');
+    if (inSet(HONORIFICS, base, foldWord(base)) || inSet(HONORIFICS, hd[1], foldWord(hd[1]))) return { type: 'stop', honorificDative: true };
+  }
   return { type: 'name' };
+}
+
+/** Index of the token after a name span, skipping one honorific ("Lakshmi akka ku"). */
+function afterNameIndex(toks: Tok[], last: number): number {
+  const n = last + 1;
+  const t = toks[n];
+  if (t && t.type === 'stop' && !t.honorificDative && inSet(HONORIFICS, t.raw, t.fold)) return n + 1;
+  return n;
 }
 
 /**
@@ -976,13 +1033,14 @@ function resolveKind(ec: EntryCues, settings: VoiceSettings): KindResult {
         if (ec.pron1) vote(G, `verb:${c.label}+speaker`, !c.fuzzy, 4);
         else if (shop) vote(R, `verb:${c.label}+enakku`, !c.fuzzy, 4);
         else if (ec.dative) vote(G, `verb:${c.label}+dative`, false, 3);
-        else vote(settings.bareKuduthaachu, `verb:${c.label}+no-dative`, false, 3);
+        else vote(settings.bareKuduthaachu, 'bare-kuduthaachu', false, 3);
         break;
       case 'imp':
         if (ec.dative) vote(G, `verb:${c.label}+dative`, false, 3);
         break;
       case 'gave':
-        if (ec.giveTo || ec.pron1 || ec.dative) vote(G, `verb:${c.label}+to`, !ec.dative || ec.giveTo || ec.pron1, 4);
+        if (ec.giveTo || ec.pron1) vote(G, `verb:${c.label}+to`, true, 4);
+        else if (ec.dative) vote(G, `verb:${c.label}+dative`, false, 3);
         else vote(R, `verb:${c.label}`, true, 4);
         break;
       case 'label':
@@ -1045,6 +1103,15 @@ interface Built {
   score: number;
   unknown: number;
   words: number;
+  /** a dative (-kku on the name, avanukku, "to") was heard in this entry */
+  dative: boolean;
+  /** another alternative heard a different amount for this entry (confidence capped at 'medium') */
+  amountDisputed?: boolean;
+}
+
+/** The direction rests on a dative alone (no explicit verb or label): blanked when alternatives disagree on it. */
+function dativeDecided(kr: KindResult): boolean {
+  return !!kr.kind && !!kr.reason && (kr.reason === 'dative' || kr.reason.endsWith('+dative'));
 }
 
 function isNameish(t: Tok): boolean {
@@ -1221,6 +1288,7 @@ function buildEntry(
       }
       case 'pron1': ec.pron1 = true; break;
       case 'dativePron': ec.dative = true; break;
+      case 'stop': if (t.honorificDative && nameIdx.length) ec.dative = true; break;
       case 'to': {
         const nx = toks[x + 1];
         if (nx && (isNameish(nx) || nx.alsoName)) ec.giveTo = true;
@@ -1280,7 +1348,7 @@ function buildEntry(
   // words next to the matched name that are not part of it ("Ramu tea kadai" for customer "Ramu") go to the note
   const chosenGroup = groups.find((g) => nameSpan.length && g.includes(nameSpan[0]));
   if (chosenGroup && best && best.matches.length) for (const x of chosenGroup) if (!nameSpan.includes(x) && nameSet.has(x)) noteIdx.add(x);
-  const afterName = nameSpan.length ? toks[nameSpan[nameSpan.length - 1] + 1] : undefined;
+  const afterName = nameSpan.length ? toks[afterNameIndex(toks, nameSpan[nameSpan.length - 1])] : undefined;
   ec.dative = ec.dative || nameSpan.some((x) => !!toks[x].suffix?.dative) || (!!afterName && DATIVE_PARTICLE.has(afterName.raw));
   // English "gave Ramu 100" (imperative/speaker) is handled by "to"/"I"; "gave to Ramu" sets giveTo.
   const name_text = nameSpan.length ? nameSurface(nameSpan) : null;
@@ -1289,8 +1357,26 @@ function buildEntry(
   const noteToks = [...noteIdx].sort((a, b) => a - b).filter((x) => toks[x] && toks[x].type !== 'sep');
   const note = noteToks.length ? noteToks.map((x) => toks[x].surface).join(' ') : null;
 
-  if (opts.contextCustomerId && !nameSpan.length) {
-    matches = [{ id: opts.contextCustomerId, score: 1 }];
+  let contextKept: boolean | undefined;
+  if (opts.contextCustomerId) {
+    const ctxId = opts.contextCustomerId;
+    if (!nameSpan.length && !codeMatch) {
+      matches = [{ id: ctxId, score: 1 }];
+      contextKept = true;
+    } else {
+      // the page's customer stays unless another customer clearly beats it (finding 9: two Ramus)
+      const ctxC = customers.find((c) => c.id === ctxId);
+      let ctxScore = 0;
+      if (codeMatch) ctxScore = codeMatch.some((m) => m.id === ctxId) ? 1 : 0;
+      else if (ctxC && name_text) ctxScore = matchCustomers(name_text, [ctxC], 1)[0]?.score ?? 0;
+      const top = matches[0]?.score ?? 0;
+      if (ctxScore >= MATCH_FLOOR && top - ctxScore < 0.1) {
+        matches = [{ id: ctxId, score: ctxScore }];
+        contextKept = true;
+      } else {
+        contextKept = false;
+      }
+    }
   }
   const intent: VoiceIntent = {
     heard,
@@ -1302,7 +1388,9 @@ function buildEntry(
     note,
     confidence: 'low',
   };
+  if (pick.run && pick.paise !== null) intent.amount_text = heard.normalize('NFC').slice(pick.run.start, pick.run.end).trim();
   if (pick.candidates.length) intent.amount_candidates = pick.candidates;
+  if (contextKept !== undefined) intent.context_kept = contextKept;
   if (dateOff !== undefined) intent.date_offset = dateOff;
   if (mode) intent.mode = mode;
   if (query && pick.paise === null) {
@@ -1322,19 +1410,25 @@ function buildEntry(
   }
   const top = matches[0]?.score ?? 0;
   const score = top + (pick.paise !== null ? 1 : pick.candidates.length ? 0.4 : 0) + (kr.kind ? (kr.explicit ? 1 : 0.7) : 0);
-  return { intent, kr, score, unknown, words };
+  return { intent, kr, score, unknown, words, dative: ec.dative };
 }
 
+/**
+ * 'high' only when exactly one customer is clearly best (or the page's customer was kept with a good match),
+ * the amount parsed and no alternative disputes it, and the direction comes from an explicit verb or label
+ * (never from the bare-kuduthaachu setting, a dative alone, a fuzzy verb, a mixed vote or an item).
+ */
 function confidenceOf(b: Built, opts: ParseOptions): 'high' | 'medium' | 'low' {
   const { intent, kr } = b;
   if (intent.amount_paise === null || intent.kind === null) return 'low';
   const ms = intent.matches;
   const top = ms[0]?.score ?? 0;
   const second = ms[1]?.score ?? 0;
-  const ctx = !!opts.contextCustomerId && !intent.name_text;
-  const nameClear = ctx || (top >= 0.85 && top - second >= 0.1);
+  const ctx = !!opts.contextCustomerId && intent.context_kept === true;
+  const nameClear = ctx ? top >= 0.85 : top >= 0.85 && top - second >= 0.1;
   const nameOk = ctx || top >= 0.7;
   if (kr.weak || !nameOk) return 'low';
+  if (b.amountDisputed || dativeDecided(kr) || kr.reason === 'bare-kuduthaachu') return 'medium';
   if (kr.explicit && nameClear) return 'high';
   return 'medium';
 }
@@ -1381,14 +1475,31 @@ export function parseUtterance(
   const parsed = alts.map((a, i) => ({ i, ...parseAlternative(a, customers, st, opts) }));
   for (const p of parsed) p.score -= 0.03 * p.i;
   const best = parsed.reduce((a, b) => (b.score > a.score + 1e-9 ? b : a));
-  // conflict check against close alternatives
+  // conflict checks against the other alternatives (same number of entries)
   for (const p of parsed) {
-    if (p === best || p.i > 2 || p.score < best.score - 0.6 || p.built.length !== best.built.length) continue;
+    if (p === best || p.built.length !== best.built.length) continue;
+    const close = p.i <= 2 && p.score >= best.score - 0.6;
     p.built.forEach((ob, k) => {
       const bb = best.built[k];
-      if (!bb.intent.kind || !ob.intent.kind || bb.intent.kind === ob.intent.kind) return;
-      if (bb.intent.amount_paise !== ob.intent.amount_paise) return;
-      if (bb.intent.matches[0]?.id !== ob.intent.matches[0]?.id) return;
+      const sameCustomer = bb.intent.matches[0]?.id === ob.intent.matches[0]?.id;
+      // amount: another reading of the same entry heard a different amount (finding 8)
+      if (bb.intent.amount_paise !== null && ob.intent.amount_paise !== null && bb.intent.amount_paise !== ob.intent.amount_paise
+        && (sameCustomer || !ob.intent.matches.length || !bb.intent.matches.length)) {
+        const list = bb.intent.amount_alternatives ?? [];
+        if (!list.includes(ob.intent.amount_paise)) list.push(ob.intent.amount_paise);
+        bb.intent.amount_alternatives = list;
+        bb.amountDisputed = true;
+      }
+      if (!bb.intent.kind || !sameCustomer || bb.intent.amount_paise !== ob.intent.amount_paise) return;
+      // direction decided only by a dative that this alternative did not hear ("Ramukku 100" vs "Ramu 100")
+      if (dativeDecided(bb.kr) && !ob.dative && ob.intent.kind !== bb.intent.kind) {
+        bb.intent.kind = null;
+        bb.intent.kind_reason = `conflict:dative(${bb.kr.reason}|${ob.kr.reason ?? 'none'})`;
+        bb.kr = { ...bb.kr, kind: null };
+        return;
+      }
+      // opposite explicit readings of the same entry (typically "Ramukku" vs "Ramu" with kuduthaachu)
+      if (!close || !ob.intent.kind || bb.intent.kind === ob.intent.kind) return;
       bb.intent.kind = null;
       bb.intent.kind_reason = `conflict:alternatives(${bb.kr.reason}|${ob.kr.reason})`;
       bb.kr = { ...bb.kr, kind: null };
@@ -1420,7 +1531,8 @@ export function detectKind(text: string, settings?: Partial<VoiceSettings>): { k
     else if (t.type === 'dativePron') ec.dative = true;
     else if (t.type === 'item') ec.items = true;
     else if (t.type === 'to' && toks[x + 1] && isNameish(toks[x + 1])) ec.giveTo = true;
-    else if (t.type === 'name' && (t.suffix?.dative || DATIVE_PARTICLE.has(toks[x + 1]?.raw ?? ''))) { dativeName = true; ec.dative = true; }
+    else if (t.type === 'stop' && t.honorificDative) { dativeName = true; ec.dative = true; }
+    else if (t.type === 'name' && (t.suffix?.dative || DATIVE_PARTICLE.has(toks[afterNameIndex(toks, x)]?.raw ?? ''))) { dativeName = true; ec.dative = true; }
   });
   const kr = resolveKind(ec, st);
   return { kind: kr.kind, reason: kr.reason, dativeName };

@@ -139,6 +139,15 @@ export function createWebPlatform(): Platform {
         } else {
           speech = createWebSpeech();
         }
+        // A hidden tab (phone locked, app switched) ends the session with what was heard so far.
+        const s = speech;
+        try {
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') void s.stop();
+          });
+        } catch {
+          /* no document (tests) */
+        }
       }
       return speech;
     },

@@ -37,26 +37,41 @@ export async function passwordSet(password: string, iterations = ITER) {
   return { salt, iterations, client_key: await fastClientKey(password, salt) };
 }
 
-/** Paired owner phone + its own owner login ("ravi" / "owner-pass") linked with link_me. */
+/** The step-up header for a password user: {'X-KK-Stepup': current client_key} (prelogin + derive, as the app does). */
+export async function stepup(username: string, password: string): Promise<Record<string, string>> {
+  const p = await prelogin(username);
+  return { 'X-KK-Stepup': await fastClientKey(password, p.body.salt) };
+}
+
+export const OWNER = { username: 'ravi', password: 'owner-pass' };
+/** Step-up header of the bootstrap owner login created by ownerWithUser(). */
+export const ownerStepup = () => stepup(OWNER.username, OWNER.password);
+
+/**
+ * Paired owner phone + its own owner login ("ravi" / "owner-pass") linked with link_me (bootstrap: no step-up
+ * needed while the shop has no users). Afterwards the phone's owner-power calls need `await ownerStepup()`.
+ */
 export async function ownerWithUser(): Promise<{ o: PairResponse; user: UserInfo; password: string }> {
   const o = await owner();
-  const password = 'owner-pass';
+  const password = OWNER.password;
   const r = await call('POST', '/users', {
     token: o.token,
-    body: { username: 'ravi', display_name: 'Ravi', role: 'owner', link_me: true, ...(await passwordSet(password)) },
+    body: { username: OWNER.username, display_name: 'Ravi', role: 'owner', link_me: true, ...(await passwordSet(password)) },
   });
   if (r.status !== 200) throw new Error(`create owner user failed ${r.status} ${JSON.stringify(r.body)}`);
   return { o, user: r.body.user, password };
 }
 
+/** Owner creates a user. Steps up as the bootstrap owner (ravi) unless `extra.headers` gives another proof. */
 export async function createUser(
   ownerToken: string,
   username: string,
   password: string | null,
-  extra: { role?: 'owner' | 'staff'; display_name?: string; google_email?: string } = {},
+  extra: { role?: 'owner' | 'staff'; display_name?: string; google_email?: string; headers?: Record<string, string> } = {},
 ): Promise<UserInfo> {
   const r = await call('POST', '/users', {
     token: ownerToken,
+    headers: extra.headers ?? (await ownerStepup()),
     body: {
       username,
       display_name: extra.display_name ?? username,
@@ -75,12 +90,23 @@ export const prelogin = (username: string) => call<{ salt: string; iterations: n
 export async function login(
   username: string,
   password: string,
-  extra: { client?: 'android' | 'web'; device_name?: string; previous_device_id?: string; max_local_code?: number } = {},
+  extra: {
+    client?: 'android' | 'web';
+    device_name?: string;
+    previous_device_id?: string;
+    previous_device_token?: string;
+    max_local_code?: number;
+    shared_computer?: boolean;
+    /** request headers, e.g. CF-Connecting-IP or X-KK-Known */
+    headers?: Record<string, string>;
+  } = {},
 ): Promise<Res<LoginResponse>> {
+  const { headers, ...fields } = extra;
   const p = await prelogin(username);
   const client_key = await fastClientKey(password, p.body.salt);
   return call<LoginResponse>('POST', '/auth/login', {
-    body: { username, client_key, device_name: extra.device_name ?? 'Login phone', client: extra.client ?? 'android', ...extra },
+    headers,
+    body: { username, client_key, device_name: extra.device_name ?? 'Login phone', client: extra.client ?? 'android', ...fields },
   });
 }
 

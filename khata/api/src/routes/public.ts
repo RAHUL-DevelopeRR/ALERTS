@@ -129,7 +129,7 @@ publicRoutes.post('/pair', async (c) => {
       )
       .bind(deviceId, deviceName, tokenHash, nowIso, codeHash),
   ];
-  const tail = newDeviceTail(db, { deviceId, prev: typeof prev === 'string' ? prev : null, maxLocal: maxLocal ?? 0, now });
+  const tail = newDeviceTail(db, { deviceId, prev: typeof prev === 'string' ? prev : null, maxLocal: maxLocal ?? 0, now, rule: { kind: 'pair' } });
   const blockIdx = stmts.length + tail.blockIdx;
   stmts.push(...tail.stmts);
   if (!isRecovery) {

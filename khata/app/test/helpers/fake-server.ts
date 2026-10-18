@@ -9,6 +9,13 @@
  *
  * Fault injection: `server.fault({ path, mode })` for network failures, lost responses after commit, or a
  * canned HTTP error. `server.requests` logs every request.
+ *
+ * v2 accounts (shared/protocol.ts): users (`server.addUser`), /config, /auth/prelogin + /auth/login (fake PBKDF2:
+ * `fakeDerive`, which the engine under test is given as `deriveKey`), /auth/google (id_token 'fake-google:<email>:<nonce>'),
+ * /auth/nonce, /auth/logout, /auth/events, /users*, step-up (X-KK-Stepup = the user's stored client_key, X-KK-Recovery =
+ * an unused recovery code; 5-minute window), per-username lockout after 5 failures with the known-device exemption, and
+ * the web transport: a web login sets `server.webCookie` (the browser's cookie jar); a request with no Authorization
+ * header uses it when `X-KK-Client: web` is present (403 csrf otherwise). Web devices never authenticate by Bearer.
  */
 import { createFakeSpeech } from '../../src/platform/fake-speech';
 import {
@@ -16,8 +23,11 @@ import {
   CUSTOMER_CANONICAL_FIELDS,
   ENTRY_CANONICAL_FIELDS,
   MAX_PUSH_ROWS,
+  PBKDF2_DEFAULT_ITERATIONS,
   PULL_PAGE_SIZE,
+  type AuthEvent,
   type Change,
+  type ClientKind,
   type CustomerRow,
   type DeviceInfo,
   type EntryRow,
@@ -26,6 +36,7 @@ import {
   type Role,
   type ShopInfo,
   type Tbl,
+  type UserInfo,
 } from '../../../shared/protocol';
 import { addDays, bizDateIST } from '../../src/core/ledger';
 
@@ -35,7 +46,25 @@ export interface FakeDevice {
   shop_id: string;
   wipe: boolean;
   requests: number;
+  /** v2: the login that created this device (null: paired with a code). */
+  user_id?: string | null;
+  client?: ClientKind | null;
+  /** v2: stepped up until this ms timestamp. */
+  stepup_until?: number;
 }
+
+export interface FakeUser {
+  info: UserInfo;
+  salt: string;
+  /** What the client sends (the fake stores it verbatim; the real server stores HMAC(PEPPER, key)). null = Google-only. */
+  client_key: string | null;
+}
+
+/** Stand-in for PBKDF2 (the engine under test gets it as `deriveKey`); the fake server stores the result verbatim. */
+export const fakeDerive = async (password: string, salt: string, iterations: number): Promise<string> =>
+  `fk:${password.normalize('NFC')}:${salt}:${iterations}`;
+
+export const LOCK_AFTER = 5;
 
 interface LogRow {
   seq: number;
@@ -104,6 +133,58 @@ export class FakeServer {
   /** Server clock (ms). Default: real time; tests set a fixed or skewed clock. */
   clock: () => number = () => Date.now();
   private codeCounter = 0;
+  // ---- v2 accounts
+  users = new Map<string, FakeUser>();
+  /** The browser's cookie jar: the kk_session token of the last web login (null: no cookie / logged out). */
+  webCookie: string | null = null;
+  /** The browser's kk_known cookie. */
+  knownCookie: string | null = null;
+  /** known_device values issued -> user id (the real server MACs them; here they are opaque strings). */
+  known = new Map<string, string>();
+  /** Web Google client ids; empty = Google sign-in off (404 on /auth/nonce and /auth/google). */
+  googleIds: string[] = [];
+  nonces = new Set<string>();
+  authEvents: AuthEvent[] = [];
+  /** Failed logins per username (reset by a success). */
+  loginFails = new Map<string, number>();
+  private nonceCounter = 0;
+  private userCounter = 0;
+
+  /** Registers a user; `password` null = Google-only (then google_email is needed). */
+  async addUser(username: string, password: string | null, role: Role = 'owner', extra: { display_name?: string; google_email?: string | null; disabled?: boolean } = {}): Promise<FakeUser> {
+    const id = `user-${++this.userCounter}`;
+    const salt = `salt-${id}`;
+    const now = this.nowIso();
+    const u: FakeUser = {
+      info: {
+        id, username, display_name: extra.display_name ?? username, role,
+        google_email: extra.google_email ?? null, google_linked: false,
+        google_email_expires_at: extra.google_email ? new Date(this.clock() + 48 * 3_600_000).toISOString() : null,
+        has_password: password !== null, created_at: now, updated_at: now, disabled_at: extra.disabled ? now : null,
+      },
+      salt,
+      client_key: password === null ? null : await fakeDerive(password, salt, PBKDF2_DEFAULT_ITERATIONS),
+    };
+    this.users.set(id, u);
+    return u;
+  }
+
+  userByName(username: string): FakeUser | null {
+    return [...this.users.values()].find((u) => u.info.username === username) ?? null;
+  }
+
+  /** Devices created by logins of `username` (live ones unless `all`). */
+  devicesOf(username: string, all = false): FakeDevice[] {
+    const u = this.userByName(username);
+    return u ? [...this.devices.values()].filter((d) => d.user_id === u.info.id && (all || !d.info.revoked_at)) : [];
+  }
+
+  private event(action: string, extra: Partial<AuthEvent> = {}): void {
+    this.authEvents.unshift({
+      id: `ev-${this.authEvents.length + 1}`, at: this.nowIso(), actor_device_id: null, actor_user_id: null,
+      action, target_user_id: null, target_device_id: null, detail: null, ...extra,
+    });
+  }
 
   /** The fetch function to hand to the engine; `label` is only used in the request log. */
   readonly fetch: typeof fetch = (input, init) => this.handle(input, init);
@@ -165,7 +246,8 @@ export class FakeServer {
   }
 
   private async handle(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    // Relative URLs (the web app's same-origin '/v1/...') resolve against the browser's origin, as in a real browser.
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, 'https://web.example');
     const method = (init?.method ?? 'GET').toUpperCase();
     const headers = new Headers(init?.headers);
     let body: unknown = undefined;
@@ -174,7 +256,15 @@ export class FakeServer {
     const path = url.pathname.slice(3);
     const pathQ = path + url.search;
     const auth = /^Bearer (.+)$/.exec(headers.get('Authorization') ?? '');
-    const dev = auth ? [...this.devices.values()].find((d) => d.token === auth[1]) ?? null : null;
+    let dev: FakeDevice | null = null;
+    let csrf = false;
+    if (auth) {
+      // Transport binding: a web session token is never accepted as a Bearer token.
+      dev = [...this.devices.values()].find((d) => d.token === auth[1] && d.client !== 'web') ?? null;
+    } else if (this.webCookie) {
+      if (headers.get('X-KK-Client') !== 'web') csrf = true;
+      else dev = [...this.devices.values()].find((d) => d.token === this.webCookie && d.client === 'web') ?? null;
+    }
     const entry: LoggedRequest = { method, path, body: body === undefined ? undefined : clone(body), device_id: dev?.info.id ?? null, status: 0 };
     this.requests.push(entry);
 
@@ -192,7 +282,7 @@ export class FakeServer {
         return this.json(fault.status ?? 500, fault.body ?? { error: 'internal' });
       }
     }
-    const res = this.route(method, path, url.searchParams, body, headers, dev);
+    const res = this.route(method, path, url.searchParams, body, headers, dev, csrf);
     entry.status = res.status;
     if (fault?.mode === 'drop-response') {
       entry.status = 'network';
@@ -204,23 +294,68 @@ export class FakeServer {
   // ---------------------------------------------------------------- routes
 
   private route(
-    method: string, path: string, q: URLSearchParams, body: unknown, headers: Headers, dev: FakeDevice | null,
+    method: string, path: string, q: URLSearchParams, body: unknown, headers: Headers, dev: FakeDevice | null, csrf = false,
   ): Response {
     if (method === 'GET' && path === '/health') return this.json(200, { ok: true });
     if (method === 'POST' && path === '/setup') return this.setup(headers, body);
     if (method === 'POST' && path === '/pair') return this.pair(body);
+    if (method === 'GET' && path === '/config') {
+      return this.json(200, { google_client_id: this.googleIds[0] ?? null, auth: { password: true }, version: 'fake', server_time: this.nowIso() });
+    }
+    if (method === 'POST' && path === '/auth/prelogin') return this.prelogin(body);
+    if (method === 'POST' && path === '/auth/login') return this.login(body, headers);
+    if (method === 'POST' && path === '/auth/nonce') {
+      if (!this.googleIds.length) return this.json(404, { error: 'not_found' });
+      const nonce = `nonce-${++this.nonceCounter}`;
+      this.nonces.add(nonce);
+      return this.json(200, { nonce });
+    }
+    if (method === 'POST' && path === '/auth/google') return this.google(body);
 
     // ---- authenticated
-    const authHeader = headers.get('Authorization');
-    if (!authHeader) return this.json(401, { error: 'unauthorized' });
+    if (csrf) return this.json(403, { error: 'csrf' });
     if (!dev) return this.json(401, { error: 'unauthorized' });
     if (dev.info.revoked_at) return this.json(401, { error: 'revoked', wipe: dev.wipe });
     dev.requests++;
     dev.info.last_seen_at = this.nowIso();
     const owner = dev.info.role === 'owner';
     const forbidden = () => this.json(403, { error: 'forbidden' });
+    const web = dev.client === 'web';
+    const stepUp = (): Response | null => this.stepUp(dev, headers);
 
-    if (method === 'GET' && path === '/me') return this.json(200, { device: clone(dev.info), shop: clone(this.shop), ...this.envelope() });
+    if (method === 'POST' && path === '/auth/logout') {
+      dev.info.revoked_at = this.nowIso();
+      if (web) this.webCookie = null;
+      this.event('logout', { actor_device_id: dev.info.id, actor_user_id: dev.user_id ?? null, target_device_id: dev.info.id });
+      return this.json(200, { ok: true, ...this.envelope() });
+    }
+    if (method === 'GET' && path === '/auth/events') {
+      if (!owner) return forbidden();
+      return this.json(200, { events: clone(this.authEvents.slice(0, 200)), ...this.envelope() });
+    }
+    if (method === 'GET' && path === '/users') {
+      if (!owner) return forbidden();
+      return this.json(200, { users: [...this.users.values()].map((u) => clone(u.info)), ...this.envelope() });
+    }
+    if (method === 'POST' && path === '/users') {
+      if (!owner) return forbidden();
+      if (web) return this.json(403, { error: 'web_forbidden' });
+      return this.createUser(dev, body, stepUp);
+    }
+    let m = /^\/users\/([^/]+)\/password$/.exec(path);
+    if (method === 'PUT' && m) return this.setPassword(dev, decodeURIComponent(m[1]), body, stepUp);
+    m = /^\/users\/([^/]+)$/.exec(path);
+    if (method === 'PUT' && m) {
+      if (!owner) return forbidden();
+      if (web) return this.json(403, { error: 'web_forbidden' });
+      return this.updateUser(dev, decodeURIComponent(m[1]), body, stepUp);
+    }
+
+    if (method === 'GET' && path === '/me') {
+      const u = dev.user_id ? this.users.get(dev.user_id) : null;
+      const user = u ? { id: u.info.id, username: u.info.username, display_name: u.info.display_name, role: u.info.role } : null;
+      return this.json(200, { device: clone(dev.info), shop: clone(this.shop), user, ...this.envelope() });
+    }
     if (method === 'POST' && path === '/sync/push') return this.push(dev, body);
     if (method === 'GET' && path === '/sync/pull') return this.pull(dev, q);
     if (method === 'POST' && path === '/devices/code-block') {
@@ -229,11 +364,17 @@ export class FakeServer {
     }
     if (method === 'POST' && path === '/devices/pair-code') {
       if (!owner) return forbidden();
+      if (web) return this.json(403, { error: 'web_forbidden' });
+      const denied = stepUp();
+      if (denied) return denied;
       const role: Role = isObj(body) && body.role === 'staff' ? 'staff' : 'owner';
       return this.json(200, { code: this.mintCode(role), expires_at: new Date(this.clock() + 600_000).toISOString(), role, ...this.envelope() });
     }
     if (method === 'POST' && path === '/devices/recovery-codes') {
       if (!owner) return forbidden();
+      if (web) return this.json(403, { error: 'web_forbidden' });
+      const denied = stepUp();
+      if (denied) return denied;
       const count = isObj(body) && typeof body.count === 'number' ? body.count : 5;
       this.recovery.clear();
       const codes: string[] = [];
@@ -248,9 +389,12 @@ export class FakeServer {
       if (!owner) return forbidden();
       return this.json(200, { devices: this.deviceList(), ...this.envelope() });
     }
-    let m = /^\/devices\/([^/]+)\/revoke$/.exec(path);
+    m = /^\/devices\/([^/]+)\/revoke$/.exec(path);
     if (method === 'POST' && m) {
       if (!owner) return forbidden();
+      if (web) return this.json(403, { error: 'web_forbidden' });
+      const denied = stepUp();
+      if (denied) return denied;
       const id = decodeURIComponent(m[1]);
       if (id === dev.info.id) return this.json(400, { error: 'cannot_revoke_self' });
       const target = this.devices.get(id);
@@ -289,6 +433,246 @@ export class FakeServer {
       });
     }
     return this.json(404, { error: 'not_found' });
+  }
+
+  // ---------------------------------------------------------------- v2 accounts
+
+  private prelogin(body: unknown): Response {
+    if (!isObj(body) || typeof body.username !== 'string') return this.json(400, { error: 'bad_request' });
+    const username = body.username.trim().toLowerCase();
+    if (!/^[a-z0-9._-]{3,32}$/.test(username)) return this.json(400, { error: 'bad_request', message: 'username' });
+    const u = this.userByName(username);
+    const real = u && u.client_key !== null && !u.info.disabled_at;
+    return this.json(200, { salt: real ? u.salt : `fake-salt-${username}`, iterations: PBKDF2_DEFAULT_ITERATIONS });
+  }
+
+  private loginExtras(body: Record<string, unknown>): { name: string; client: ClientKind; shared: boolean; prev: string | null; prevToken: string | null; max: number } | Response {
+    const name = typeof body.device_name === 'string' ? body.device_name.trim() : '';
+    if (!name || name.length > 60) return this.json(400, { error: 'bad_request', message: 'device_name' });
+    if (body.client !== 'android' && body.client !== 'web') return this.json(400, { error: 'bad_request', message: 'client' });
+    return {
+      name, client: body.client, shared: body.shared_computer === true,
+      prev: typeof body.previous_device_id === 'string' ? body.previous_device_id : null,
+      prevToken: typeof body.previous_device_token === 'string' ? body.previous_device_token : null,
+      max: typeof body.max_local_code === 'number' ? body.max_local_code : 0,
+    };
+  }
+
+  private login(body: unknown, headers: Headers): Response {
+    if (!isObj(body) || typeof body.username !== 'string' || typeof body.client_key !== 'string') return this.json(400, { error: 'bad_request' });
+    const ex = this.loginExtras(body);
+    if (ex instanceof Response) return ex;
+    const username = body.username.trim().toLowerCase();
+    const u = this.userByName(username);
+    const knownValue = headers.get('X-KK-Known') ?? (ex.client === 'web' ? this.knownCookie : null);
+    const knownFor = knownValue ? this.known.get(knownValue) ?? null : null;
+    const exempt = !!u && knownFor === u.info.id;
+    const fails = this.loginFails.get(username) ?? 0;
+    if (!exempt && fails >= LOCK_AFTER) return this.json(429, { error: 'locked', retry_after: 30 });
+    const ok = !!u && !u.info.disabled_at && u.client_key !== null && u.client_key === body.client_key;
+    if (!ok) {
+      if (!exempt) this.loginFails.set(username, fails + 1);
+      this.event('login.failed', { detail: { username, client: ex.client } });
+      return this.json(403, { error: 'invalid_login' });
+    }
+    if (ex.client === 'web' && u.info.role !== 'owner') {
+      this.event('login.refused', { actor_user_id: u.info.id, detail: { why: 'web_owner_only' } });
+      return this.json(403, { error: 'web_owner_only' });
+    }
+    this.loginFails.delete(username);
+    return this.issue(u, ex, 'login.ok');
+  }
+
+  private google(body: unknown): Response {
+    if (!this.googleIds.length) return this.json(404, { error: 'not_found' });
+    if (!isObj(body) || typeof body.id_token !== 'string') return this.json(400, { error: 'bad_request' });
+    const ex = this.loginExtras(body);
+    if (ex instanceof Response) return ex;
+    const m = /^fake-google:([^:]+):(.+)$/.exec(body.id_token);
+    if (!m) return this.json(403, { error: 'invalid_token', message: 'signature' });
+    const [, email, nonce] = m;
+    if (!this.nonces.delete(nonce)) return this.json(403, { error: 'invalid_token', message: 'nonce' });
+    const u = [...this.users.values()].find((x) => x.info.google_email === email.toLowerCase() && !x.info.disabled_at);
+    if (!u) return this.json(403, { error: 'not_linked' });
+    u.info.google_linked = true;
+    u.info.google_email_expires_at = null;
+    if (ex.client === 'web' && u.info.role !== 'owner') return this.json(403, { error: 'web_owner_only' });
+    return this.issue(u, ex, 'google.ok');
+  }
+
+  private issue(u: FakeUser, ex: { name: string; client: ClientKind; shared: boolean; prev: string | null; prevToken: string | null; max: number }, action: string): Response {
+    const id = `dev-${++tokenCounter}`;
+    const token = `tok-${tokenCounter}-${Math.random().toString(36).slice(2)}`;
+    const now = this.nowIso();
+    const web = ex.client === 'web';
+    this.devices.set(id, {
+      info: { id, name: ex.name, role: u.info.role, created_at: now, last_seen_at: null, revoked_at: null, client: ex.client, user_id: u.info.id },
+      token, shop_id: this.shop.id, wipe: false, requests: 0, user_id: u.info.id, client: ex.client,
+    });
+    if (ex.prev) {
+      // Login takeover rule: same user, or a legacy row proved by its token. Anything else revokes nothing.
+      const prev = this.devices.get(ex.prev);
+      if (prev && !prev.info.revoked_at && ((prev.user_id ?? null) === u.info.id || (!prev.user_id && ex.prevToken !== null && prev.token === ex.prevToken))) {
+        prev.info.revoked_at = now;
+      }
+    }
+    const known = `${id}.known`;
+    this.known.set(known, u.info.id);
+    if (web) {
+      this.webCookie = token;
+      this.knownCookie = known;
+    }
+    const expires = web ? new Date(this.clock() + (ex.shared ? 12 * 3_600_000 : 30 * 86_400_000)).toISOString() : null;
+    this.event(action, { actor_device_id: id, actor_user_id: u.info.id, target_device_id: id, detail: { client: ex.client, ...(ex.shared ? { shared_computer: true } : {}) } });
+    return this.json(200, {
+      token: web ? null : token, device_id: id, role: u.info.role, shop: clone(this.shop),
+      code_block: web ? null : this.block(ex.max), ...this.envelope(),
+      user: { id: u.info.id, username: u.info.username, display_name: u.info.display_name, role: u.info.role },
+      known_device: known, expires_at: expires,
+    });
+  }
+
+  /** Step-up: null = proceed; else the 403 (stepup_required / stepup_invalid). Mirrors api/src/lib/stepup.ts. */
+  private stepUp(dev: FakeDevice, headers: Headers): Response | null {
+    const now = this.clock();
+    if (dev.stepup_until && dev.stepup_until > now) return null;
+    const grant = (): null => {
+      dev.stepup_until = now + 5 * 60_000;
+      this.event('stepup.ok', { actor_device_id: dev.info.id, actor_user_id: dev.user_id ?? null });
+      return null;
+    };
+    const recovery = headers.get('X-KK-Recovery');
+    if (recovery !== null) {
+      const code = recovery.replace(/[\s-]+/g, '').toUpperCase();
+      if (this.recovery.delete(code)) return grant();
+      this.event('stepup.failed', { actor_device_id: dev.info.id });
+      return this.json(403, { error: 'stepup_invalid' });
+    }
+    const key = headers.get('X-KK-Stepup');
+    const user = dev.user_id ? this.users.get(dev.user_id) ?? null : null;
+    if (key !== null) {
+      if (user && user.client_key !== null && user.client_key === key) return grant();
+      this.event('stepup.failed', { actor_device_id: dev.info.id });
+      return this.json(403, { error: 'stepup_invalid' });
+    }
+    if (!dev.user_id && this.users.size === 0) return null; // bootstrap
+    return this.json(403, { error: 'stepup_required', stepup: user?.client_key ? ['password', 'recovery'] : ['recovery'] });
+  }
+
+  private createUser(dev: FakeDevice, body: unknown, stepUp: () => Response | null): Response {
+    if (!isObj(body) || typeof body.username !== 'string') return this.json(400, { error: 'bad_request' });
+    const username = body.username.trim().toLowerCase();
+    if (!/^[a-z0-9._-]{3,32}$/.test(username)) return this.json(400, { error: 'bad_request', message: 'username' });
+    if (body.role !== 'owner' && body.role !== 'staff') return this.json(400, { error: 'bad_request', message: 'role' });
+    const hasPw = body.client_key !== undefined;
+    if (hasPw && (typeof body.salt !== 'string' || body.iterations !== PBKDF2_DEFAULT_ITERATIONS || typeof body.client_key !== 'string')) {
+      return this.json(400, { error: 'bad_request', message: 'iterations' });
+    }
+    const email = typeof body.google_email === 'string' ? body.google_email.trim().toLowerCase() : null;
+    if (email && !/@(gmail|googlemail)\.com$/.test(email)) return this.json(400, { error: 'bad_request', message: 'google_email_domain' });
+    if (!hasPw && !email) return this.json(400, { error: 'bad_request', message: 'password' });
+    const linkMe = body.link_me === true;
+    if (linkMe && body.role !== 'owner') return this.json(400, { error: 'bad_request', message: 'link_me' });
+    if (linkMe && dev.user_id) return this.json(400, { error: 'already_linked' });
+    const denied = stepUp();
+    if (denied) return denied;
+    if (this.userByName(username)) return this.json(409, { error: 'username_taken' });
+    if (email && [...this.users.values()].some((u) => u.info.google_email === email)) return this.json(409, { error: 'google_email_taken' });
+    const id = `user-${++this.userCounter}`;
+    const now = this.nowIso();
+    const u: FakeUser = {
+      info: {
+        id, username, display_name: typeof body.display_name === 'string' && body.display_name.trim() ? body.display_name.trim() : username,
+        role: body.role, google_email: email, google_linked: false,
+        google_email_expires_at: email ? new Date(this.clock() + 48 * 3_600_000).toISOString() : null,
+        has_password: hasPw, created_at: now, updated_at: now, disabled_at: null,
+      },
+      salt: hasPw ? (body.salt as string) : `salt-${id}`,
+      client_key: hasPw ? (body.client_key as string) : null,
+    };
+    this.users.set(id, u);
+    if (linkMe) {
+      dev.user_id = id;
+      dev.info.user_id = id;
+    }
+    this.event('user.create', { actor_device_id: dev.info.id, actor_user_id: dev.user_id ?? null, target_user_id: id, detail: { username, role: body.role } });
+    return this.json(200, { user: clone(u.info), ...this.envelope() });
+  }
+
+  private updateUser(dev: FakeDevice, id: string, body: unknown, stepUp: () => Response | null): Response {
+    if (!isObj(body)) return this.json(400, { error: 'bad_request' });
+    const u = this.users.get(id);
+    if (!u) return this.json(404, { error: 'not_found' });
+    const self = dev.user_id === id;
+    if (self && body.role !== undefined && body.role !== u.info.role) return this.json(400, { error: 'cannot_change_own_role' });
+    if (self && body.disabled === true) return this.json(400, { error: 'cannot_disable_self' });
+    const sensitive = body.role !== undefined || body.google_email !== undefined || body.disabled !== undefined;
+    if (sensitive) {
+      const denied = stepUp();
+      if (denied) return denied;
+    }
+    const now = this.nowIso();
+    const changed: Record<string, unknown> = {};
+    if (typeof body.display_name === 'string' && body.display_name.trim()) {
+      u.info.display_name = body.display_name.trim();
+      changed.display_name = u.info.display_name;
+    }
+    if (body.role === 'owner' || body.role === 'staff') {
+      const losesOwner = u.info.role === 'owner' && body.role === 'staff';
+      const others = [...this.users.values()].filter((x) => x.info.id !== id && x.info.role === 'owner' && !x.info.disabled_at).length;
+      if (losesOwner && others < 1) return this.json(409, { error: 'last_owner' });
+      u.info.role = body.role;
+      changed.role = body.role;
+      for (const d of this.devices.values()) if (d.user_id === id && !d.info.revoked_at) d.info.role = body.role;
+    }
+    if (body.google_email !== undefined) {
+      const email = typeof body.google_email === 'string' ? body.google_email.trim().toLowerCase() : null;
+      if (email && !/@(gmail|googlemail)\.com$/.test(email)) return this.json(400, { error: 'bad_request', message: 'google_email_domain' });
+      if (email && [...this.users.values()].some((x) => x.info.id !== id && x.info.google_email === email)) return this.json(409, { error: 'google_email_taken' });
+      u.info.google_email = email;
+      u.info.google_linked = false;
+      u.info.google_email_expires_at = email ? new Date(this.clock() + 48 * 3_600_000).toISOString() : null;
+      changed.google_email = email;
+    }
+    if (typeof body.disabled === 'boolean') {
+      if (body.disabled && u.info.role === 'owner' && !u.info.disabled_at) {
+        const others = [...this.users.values()].filter((x) => x.info.id !== id && x.info.role === 'owner' && !x.info.disabled_at).length;
+        if (others < 1) return this.json(409, { error: 'last_owner' });
+      }
+      u.info.disabled_at = body.disabled ? (u.info.disabled_at ?? now) : null;
+      changed.disabled = body.disabled;
+      if (body.disabled) for (const d of this.devices.values()) if (d.user_id === id && !d.info.revoked_at) d.info.revoked_at = now;
+    }
+    u.info.updated_at = now;
+    this.event('user.update', { actor_device_id: dev.info.id, actor_user_id: dev.user_id ?? null, target_user_id: id, detail: changed });
+    return this.json(200, { user: clone(u.info), ...this.envelope() });
+  }
+
+  private setPassword(dev: FakeDevice, id: string, body: unknown, stepUp: () => Response | null): Response {
+    if (!isObj(body) || typeof body.salt !== 'string' || typeof body.client_key !== 'string') return this.json(400, { error: 'bad_request', message: 'salt' });
+    if (body.iterations !== PBKDF2_DEFAULT_ITERATIONS) return this.json(400, { error: 'bad_request', message: 'iterations' });
+    const self = dev.user_id === id;
+    if (!self && dev.info.role !== 'owner') return this.json(403, { error: 'forbidden' });
+    if (!self && dev.client === 'web') return this.json(403, { error: 'web_forbidden' });
+    const u = this.users.get(id);
+    if (!u) return this.json(404, { error: 'not_found' });
+    if (self) {
+      if (typeof body.current_client_key !== 'string') return this.json(400, { error: 'bad_request', message: 'current_client_key' });
+      if (u.client_key !== body.current_client_key) return this.json(403, { error: 'invalid_login' });
+    } else {
+      const denied = stepUp();
+      if (denied) return denied;
+    }
+    u.salt = body.salt;
+    u.client_key = body.client_key;
+    u.info.has_password = true;
+    u.info.updated_at = this.nowIso();
+    this.loginFails.delete(u.info.username);
+    for (const d of this.devices.values()) {
+      if (d.user_id === id && !d.info.revoked_at && !(self && d.info.id === dev.info.id)) d.info.revoked_at = this.nowIso();
+    }
+    this.event(self ? 'password.change' : 'password.reset', { actor_device_id: dev.info.id, actor_user_id: dev.user_id ?? null, target_user_id: id });
+    return this.json(200, { ok: true, ...this.envelope() });
   }
 
   private deviceList(): DeviceInfo[] {
@@ -479,7 +863,8 @@ export class FakeServer {
     const since = Number(q.get('since') ?? '0');
     const limit = Math.min(Math.max(Number(q.get('limit') ?? PULL_PAGE_SIZE), 1), PULL_PAGE_SIZE);
     if (!Number.isInteger(since) || since < 0) return this.json(400, { error: 'bad_request' });
-    const page = this.log.filter((l) => l.seq > since && l.device_id !== dev.info.id).slice(0, limit + 1);
+    // since=0 is a full re-pull (local database rebuilt): it includes the caller's own rows, like the real server.
+    const page = this.log.filter((l) => l.seq > since && (since === 0 || l.device_id !== dev.info.id)).slice(0, limit + 1);
     const maxSeq = this.log.length ? this.log[this.log.length - 1].seq : 0;
     const hasMore = page.length > limit;
     const rows = hasMore ? page.slice(0, limit) : page;

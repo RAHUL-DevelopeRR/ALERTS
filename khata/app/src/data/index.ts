@@ -26,7 +26,12 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-async function openDb(): Promise<Db> {
+export interface OpenRepoOptions {
+  /** Browser only: a throwaway in-memory database (the web app's "shared computer" mode). Ignored on Android. */
+  memory?: boolean;
+}
+
+async function openDb(opts: OpenRepoOptions): Promise<Db> {
   if (typeof __NATIVE_BUILD__ !== 'undefined' && __NATIVE_BUILD__) {
     const { openNative } = await import('../db/native');
     return openNative();
@@ -36,13 +41,13 @@ async function openDb(): Promise<Db> {
     return openNative();
   }
   const { openSqlJs } = await import('../db/sqljs');
-  return openSqlJs({ persistKey: PREVIEW_DB_KEY });
+  return openSqlJs(opts.memory ? {} : { persistKey: PREVIEW_DB_KEY });
 }
 
 /** Open the database for this platform, migrate it, and initialise the repo. Throws RepoError('SQLITE_TOO_OLD')
  *  if the engine is older than MIN_SQLITE (the app must not run on it). */
-export async function openRepo(): Promise<{ repo: Repo; db: Db }> {
-  const db = await openDb();
+export async function openRepo(opts: OpenRepoOptions = {}): Promise<{ repo: Repo; db: Db }> {
+  const db = await openDb(opts);
   const [{ v }] = await db.query<{ v: string }>('SELECT sqlite_version() AS v');
   if (compareVersions(String(v), MIN_SQLITE) < 0) {
     await db.close().catch(() => undefined);

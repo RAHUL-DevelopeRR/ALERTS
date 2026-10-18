@@ -16,6 +16,8 @@ import { endQuick, quick } from '../quick-session';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { rowDetail } from './home';
+import { micButton } from '../voice/mic-button';
+import { loadVoicePrefs } from '../voice/prefs';
 
 export const quickScreen: Screen = async (root) => {
   const s = await refreshSettings();
@@ -24,7 +26,7 @@ export const quickScreen: Screen = async (root) => {
     return;
   }
   const todayStr = today(s.clock_offset_ms);
-  const rows = (await app.repo.listHome()).filter((r) => !r.erased_at);
+  const [rows] = await Promise.all([app.repo.listHome().then((all) => all.filter((r) => !r.erased_at)), loadVoicePrefs()]);
   const keys = new Map(rows.map((r) => [r.id, searchKey(r)]));
   const { body, footer } = shell(root, { title: t('quick.title'), back: true });
 
@@ -102,7 +104,7 @@ export const quickScreen: Screen = async (root) => {
     summary,
     h('div', 'chips', dateChip),
     h('p', { class: 'muted', style: { fontSize: '15px', margin: '4px 4px 10px' }, text: t('quick.help') }),
-    search.el,
+    h('div', 'search-row', search.el, micButton({ quick: true }, 'mic-quick')),
     list,
   );
   paint();

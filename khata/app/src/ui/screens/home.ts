@@ -12,6 +12,8 @@ import { money, toneClass } from '../format';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { saveBackupCopy } from '../backup';
+import { micButton } from '../voice/mic-button';
+import { loadVoicePrefs } from '../voice/prefs';
 
 type Sort = 'recent' | 'due' | 'oldest';
 
@@ -85,7 +87,7 @@ function customerRow(r: HomeRow, paired: boolean): HTMLElement {
 
 export const homeScreen: Screen = async (root, route) => {
   const s = await refreshSettings();
-  const [rows, totals, onboarded] = await Promise.all([app.repo.listHome(), app.repo.totals(), app.repo.getMeta('onboarded')]);
+  const [rows, totals, onboarded] = await Promise.all([app.repo.listHome(), app.repo.totals(), app.repo.getMeta('onboarded'), loadVoicePrefs()]);
   if (route.params.fresh === '1') {
     homeState.q = '';
     delete route.params.fresh;
@@ -137,6 +139,8 @@ export const homeScreen: Screen = async (root, route) => {
     },
     onEnter: () => void app.platform.hideKeyboard(),
   });
+  // Voice entry (v2): the mic sits beside the search box; null when switched off in Settings → Voice.
+  const searchRow = h('div', 'search-row', search.el, micButton({}));
   // Sort chips wrap onto a second line instead of scrolling off-screen; the due list is a separate, clearly
   // different action (a filter with its own sheet), not a fourth sort.
   const chipRow = h('div', 'chips');
@@ -255,7 +259,7 @@ export const homeScreen: Screen = async (root, route) => {
     body,
     summary,
     banners,
-    rows.length > 0 || homeState.q ? search.el : null,
+    rows.length > 0 || homeState.q ? searchRow : null,
     rows.length > 0 ? chipRow : null,
     dueLine,
     emptyEl,

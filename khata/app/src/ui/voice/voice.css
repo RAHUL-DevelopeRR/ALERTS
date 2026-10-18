@@ -1,0 +1,137 @@
+/* Voice entry (v2): mic buttons, the listening sheet, the "Heard" banner on the keypad, Settings -> Voice.
+   Same rules as app.css: old WebView safe (no :has(), no flex gap). */
+
+/* ---- mic beside the search box (home, quick entry) */
+.search-row { display: flex; align-items: flex-start; }
+.search-row .search-wrap { flex: 1 1 auto; min-width: 0; }
+.mic-btn {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  margin: 2px 0 0 8px;
+  border-radius: 24px;
+  border: 0;
+  background: var(--brand);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .15);
+}
+.mic-btn:active { filter: brightness(.9); }
+.mic-btn .ic { width: 26px; height: 26px; }
+.mic-btn:disabled { opacity: .45; }
+
+/* ---- listening sheet */
+.voice-scrim { align-items: flex-end; padding: 0; }
+.voice-panel {
+  background: var(--card);
+  border-radius: 22px 22px 0 0;
+  width: 100%;
+  max-width: 480px;
+  padding: 14px 18px calc(16px + var(--sab));
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .25);
+  text-align: center;
+  animation: up .16s ease-out;
+}
+.voice-state { font-size: 20px; font-weight: 800; margin: 2px 0 10px; min-height: 28px; }
+.voice-mic {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 10px;
+  border-radius: 48px;
+  border: 0;
+  background: var(--brand);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.voice-mic .ic { width: 44px; height: 44px; }
+.voice-mic.listening::before {
+  content: '';
+  position: absolute;
+  top: -8px; right: -8px; bottom: -8px; left: -8px;
+  border-radius: 56px;
+  border: 4px solid rgba(15, 81, 50, .45);
+  animation: voicePulse 1.2s ease-out infinite;
+}
+.voice-mic.listening::after {
+  content: '';
+  position: absolute;
+  top: -8px; right: -8px; bottom: -8px; left: -8px;
+  border-radius: 56px;
+  border: 4px solid rgba(15, 81, 50, .45);
+  animation: voicePulse 1.2s ease-out .6s infinite;
+}
+@keyframes voicePulse { from { transform: scale(1); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
+.voice-mic.thinking { background: var(--settled); }
+.voice-mic.failed { background: var(--danger); }
+.voice-live {
+  min-height: 56px;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  padding: 0 4px;
+}
+.voice-live.placeholder { color: #9aa59f; font-weight: 500; }
+.voice-hint { font-size: 15px; color: var(--muted); margin: 6px 0 2px; line-height: 1.45; }
+.voice-hint b { color: var(--text); font-size: 17px; }
+.voice-msg { font-size: 16px; color: var(--danger); font-weight: 600; margin: 4px 0 2px; line-height: 1.45; overflow-wrap: anywhere; }
+.voice-actions { display: flex; margin-top: 12px; }
+.voice-actions .btn { flex: 1 1 0; min-width: 0; min-height: 56px; font-size: 18px; }
+.voice-actions .btn + .btn { margin-left: 10px; }
+
+/* ---- "Heard" banner on the keypad */
+.voice-banner {
+  background: var(--brand-soft);
+  border: 1.5px solid #b9d8c5;
+  border-radius: 12px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.voice-banner-top { display: flex; align-items: center; }
+.voice-banner-top .ic { width: 20px; height: 20px; flex: none; margin-right: 8px; color: var(--brand); }
+.voice-heard { flex: 1; min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.voice-heard b { color: var(--text); }
+.voice-queue { flex: none; margin-left: 8px; background: var(--brand); color: #fff; border-radius: 10px; padding: 1px 9px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.voice-banner-row { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; margin-top: 2px; }
+.voice-amount-src { font-size: 22px; font-weight: 800; line-height: 1.3; overflow-wrap: anywhere; margin-right: 10px; }
+.voice-amount-src .arrow { color: var(--muted); font-weight: 500; margin: 0 6px; }
+.voice-bal { font-size: 14px; color: var(--muted); white-space: nowrap; }
+.voice-bal b { color: var(--text); }
+.voice-ask { color: var(--warn); background: var(--warn-bg); border-radius: 8px; padding: 4px 10px; margin-top: 6px; font-weight: 700; }
+.voice-alts-row { display: flex; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+.voice-alts-row .voice-alt-label { margin: 0 8px 0 0; }
+.voice-banner .chips { margin: 0; }
+.voice-banner .chip { min-height: 38px; padding: 2px 12px; font-size: 15px; margin: 2px 6px 2px 0; }
+.voice-alt-label { font-size: 13px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+.entry-screen.voice .keypad { grid-template-rows: repeat(4, minmax(48px, 1fr)); max-height: 300px; }
+.entry-screen.voice .amount-box { padding-top: 4px; padding-bottom: 4px; }
+.seg button.on-none { background: transparent; }
+.amount-box.none { border-color: var(--line); }
+.amount-box.none .amount-val { color: var(--muted); }
+
+/* ---- picker sheet rows */
+.voice-pick-row { display: flex; align-items: center; width: 100%; text-align: left; }
+.voice-pick-main { flex: 1; min-width: 0; }
+.voice-pick-main .sub { display: block; font-size: 14px; color: var(--muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-pick-bal { flex: none; margin-left: 10px; font-size: 17px; }
+
+/* ---- Settings -> Voice */
+.voice-choice { display: block; width: 100%; text-align: left; border: 1.5px solid var(--line); border-radius: 12px; background: var(--card); padding: 10px 14px; font-size: 16px; line-height: 1.4; margin-top: 8px; }
+.voice-choice.on { border-color: var(--brand); background: var(--brand-soft); font-weight: 700; }
+.voice-choice .sub { display: block; font-size: 14px; color: var(--muted); font-weight: 400; }
+.voice-try-row { display: flex; align-items: center; }
+.voice-try-row .input { flex: 1 1 auto; min-width: 0; }
+.voice-result { background: #f4f6f5; border-radius: 10px; padding: 10px 12px; margin-top: 10px; font-size: 16px; line-height: 1.5; }
+.voice-result .kind-gave { color: var(--gave); font-weight: 700; }
+.voice-result .kind-got { color: var(--got); font-weight: 700; }
+.voice-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-gap: 8px; margin: 8px 0 10px; }
+.voice-stat { background: #f4f6f5; border-radius: 10px; padding: 8px 12px; }
+.voice-stat .v { display: block; font-size: 24px; font-weight: 800; line-height: 1.2; }
+.voice-stat .l { display: block; font-size: 13px; color: var(--muted); }

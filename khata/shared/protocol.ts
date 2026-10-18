@@ -109,6 +109,8 @@ export interface ApiError {
   wipe?: boolean;
   /** v2: seconds to wait, on 429 locked (also sent as the Retry-After header). */
   retry_after?: number;
+  /** v2: on 403 stepup_required, which proofs this device can give: its password (client_key) and/or a recovery code. */
+  stepup?: Array<'password' | 'recovery'>;
 }
 
 // ---------------------------------------------------------------- routes (all under /v1)
@@ -289,8 +291,13 @@ export const CUSTOMER_CANONICAL_FIELDS = [
 //       any method; 403 {error:'csrf'} without it). Use fetch(..., {credentials: 'same-origin'}).
 //   A web token is never accepted as a Bearer token and an app token never as a cookie (401 unauthorized).
 
-/** PBKDF2 iteration bounds the server accepts when a password is set. */
-export const PBKDF2_MIN_ITERATIONS = 300_000;
+/**
+ * PBKDF2 iterations. The server stores ONLY the default count (OWASP's 600,000 for PBKDF2-HMAC-SHA256): a password
+ * set with any other count is refused (400 'iterations'), so a weak client cannot register a cheap verifier and
+ * /auth/prelogin can answer the same count for everyone (a different count would reveal that the user exists).
+ * MIN/MAX are kept for forward compatibility; in this build they are both effectively the default.
+ */
+export const PBKDF2_MIN_ITERATIONS = 600_000;
 export const PBKDF2_MAX_ITERATIONS = 2_000_000;
 export const PBKDF2_DEFAULT_ITERATIONS = 600_000;
 /** Bytes of salt (client-generated, crypto.getRandomValues) and of the derived client_key. */
@@ -303,6 +310,22 @@ export const SESSION_COOKIE = 'kk_session';
 export const WEB_CLIENT_HEADER = 'X-KK-Client';
 /** Web sessions end after this many days (cookie Max-Age and devices.expires_at). */
 export const WEB_SESSION_DAYS = 30;
+/** With `shared_computer: true` in the login body a web session ends after this many hours and the cookie has no Max-Age. */
+export const WEB_SHARED_SESSION_HOURS = 12;
+/** Step-up (see "Step-up" below): header carrying the caller's CURRENT client_key, or a printed recovery code. */
+export const STEPUP_HEADER = 'X-KK-Stepup';
+export const RECOVERY_HEADER = 'X-KK-Recovery';
+/** A step-up proof keeps the device stepped up for this long (devices.stepup_until). */
+export const STEPUP_WINDOW_MIN = 5;
+/** Known-device value (see "Lockout" below): returned by every login as `known_device` (+ cookie kk_known on the web). */
+export const KNOWN_DEVICE_HEADER = 'X-KK-Known';
+export const KNOWN_DEVICE_COOKIE = 'kk_known';
+/** An unlinked pre-registered google_email can be claimed for this long after the owner set it. */
+export const GOOGLE_EMAIL_LINK_HOURS = 48;
+/** A nonce from POST /auth/nonce is valid this long, once. */
+export const NONCE_TTL_MIN = 10;
+/** GET /auth/events returns at most this many rows (newest first). */
+export const AUTH_EVENTS_LIMIT = 200;
 
 export type ClientKind = 'android' | 'web';
 
@@ -320,6 +343,12 @@ export interface UserInfo extends UserSummary {
   google_email: string | null;
   /** True once that Google account signed in (its `sub` is linked). */
   google_linked: boolean;
+  /**
+   * While google_email is set but not linked: the instant until which its first Google sign-in may claim it
+   * (GOOGLE_EMAIL_LINK_HOURS after the owner set it). null when linked or when there is no google_email. After it
+   * passes the owner must set the address again (PUT /users/:id, with step-up).
+   */
+  google_email_expires_at: string | null;
   has_password: boolean;
   created_at: string;
   updated_at: string;
@@ -342,25 +371,50 @@ export interface ConfigResponse {
 /**
  * POST /v1/auth/prelogin  (public, rate limited). Step 1 of a password login: fetch the PBKDF2 parameters.
  * For an unknown or disabled username (or a user without a password) the server answers with a deterministic fake
- * salt and the default iteration count, in the same shape and status, so existence is not revealed.
+ * salt, in the same shape and status, so existence is not revealed. `iterations` is PBKDF2_DEFAULT_ITERATIONS for
+ * EVERYONE (the server stores no other count).
  * Errors: 400 bad_request (username not matching USERNAME_RE), 429 throttled.
  */
 export interface PreloginRequest { username: string }
 export interface PreloginResponse { salt: string; iterations: number }
 
-/** Extras every login carries (same meaning as in PairRequest). */
+/**
+ * Extras every login carries. `client` is what the client DECLARES; it is not a security boundary (anyone holding
+ * credentials can claim 'android'), so owner-power routes gate on step-up, not on client kind.
+ *
+ * previous_device_id (+ previous_device_token): this client's old device row, revoked in the login batch and its
+ * unused codes moved to the new row ONLY when (a) that row belongs to the same user as the login, or (b) it is a
+ * legacy paired row (user_id NULL) AND previous_device_token is its still-valid bearer token (proof of possession).
+ * Anything else (another user's device, a legacy id without its token) revokes nothing, silently: device ids are
+ * visible to every phone through pulled entries. Recovery-kind codes are never moved onto a 'web' device (they stay
+ * on the revoked row and keep working at /pair).
+ *
+ * shared_computer (web only): the session ends after WEB_SHARED_SESSION_HOURS and the cookie has no Max-Age
+ * (dies with the browser). Staff when staff web arrives: the server will force it.
+ */
 export interface LoginExtras {
   device_name: string;
   client: ClientKind;
   max_local_code?: number;
   previous_device_id?: string;
+  previous_device_token?: string;
+  shared_computer?: boolean;
 }
 
 /**
  * POST /v1/auth/login  (public, rate limited). Step 2: send the derived key.
+ *
+ * Lockout is keyed on (username, source): source = the client's /24 (IPv4) or /48 (IPv6) from CF-Connecting-IP,
+ * else 'unknown'. 5 failures lock that pair for 30 s, doubling to 15 min, never permanently; a successful login
+ * resets it. An attacker therefore cannot lock the owner out from elsewhere. Known-device exemption: every
+ * successful login returns `known_device` (the web also gets the cookie kk_known); a later login that carries it
+ * (header X-KK-Known, or the cookie) for the SAME user is exempt from the per-source and shop-wide throttles and is
+ * keyed on its own (username, device) backoff instead. The shop-wide daily budget (auth_failures, 429 throttled) is
+ * charged only to failing unknown sources.
+ *
  * Errors: 400 bad_request; 403 {error:'invalid_login'} for an unknown user AND for a wrong password (identical);
- * 429 {error:'locked', retry_after} after 5 failures for that username (30 s, doubling to 15 min, never permanent,
- * reset by a successful login); 429 {error:'throttled'} when the shop-wide daily failure budget is spent.
+ * 403 {error:'web_owner_only'} for a staff user with client 'web' (credentials were right; use the phone app);
+ * 429 {error:'locked', retry_after}; 429 {error:'throttled'}.
  */
 export interface LoginRequest extends LoginExtras {
   username: string;
@@ -371,26 +425,78 @@ export interface LoginRequest extends LoginExtras {
 /**
  * Login answer: PairResponse-compatible plus the user. `token` is null for client 'web' (the session is in the
  * HttpOnly kk_session cookie); a string for 'android' (store it like a paired token).
+ * `code_block` is null for client 'web': the web never creates customers offline; it syncs first and asks
+ * POST /devices/code-block when it needs codes (so a browser does not burn 50 codes per login).
+ * `known_device`: store it (Android: secure storage, sent later as X-KK-Known; web: the kk_known cookie is set too).
+ * `expires_at`: when this session ends (web only), else null.
  */
-export interface LoginResponse extends Omit<PairResponse, 'token'> {
+export interface LoginResponse extends Omit<PairResponse, 'token' | 'code_block'> {
   token: string | null;
+  code_block: { start: number; end: number } | null;
   user: UserSummary;
+  known_device: string;
+  expires_at: string | null;
 }
 
 /**
- * POST /v1/auth/google  (public, rate limited; 404 when GOOGLE_CLIENT_IDS is not configured).
+ * POST /v1/auth/nonce  (public, rate limited; 404 when Google sign-in is off) -> a single-use nonce valid
+ * NONCE_TTL_MIN minutes. Pass it to Google Identity Services (`nonce` in google.accounts.id.initialize); the ID token
+ * then carries it in its `nonce` claim and /auth/google requires it there (replay of a leaked token is refused).
+ */
+export interface NonceResponse { nonce: string }
+
+/**
+ * POST /v1/auth/google  (public, rate limited; 404 when the client kind's audience list is empty: GOOGLE_CLIENT_IDS
+ * for 'web', GOOGLE_ANDROID_CLIENT_IDS for 'android').
  * `id_token` = the Google Identity Services credential (a JWT). The server checks the RS256 signature against
- * Google's JWKS, iss, aud (one of GOOGLE_CLIENT_IDS), exp/iat (5 min skew) and email_verified. It signs in only a
- * user the owner pre-registered: google_sub already linked, or google_email equal (case-insensitive) and not yet
- * linked (then links it). Never creates users.
- * Errors: 400 bad_request; 403 {error:'invalid_token'} (bad/expired/wrong audience token); 403 {error:'not_linked'}
- * (valid Google account, but no user at this shop has it).
+ * Google's JWKS, iss, aud (in the list for the declared client kind), exp/iat (5 min skew), email_verified and the
+ * `nonce` claim (a live, unused nonce from POST /auth/nonce; consumed here). It signs in only a user the owner
+ * pre-registered: google_sub already linked, or google_email equal (case-insensitive), not yet linked and set less
+ * than GOOGLE_EMAIL_LINK_HOURS ago (then links it). Never creates users.
+ * Errors: 400 bad_request; 403 {error:'invalid_token', message} (message 'nonce' for a missing/used/expired nonce);
+ * 403 {error:'not_linked'} (valid Google account, but no user at this shop has it, or the pre-registration expired);
+ * 403 {error:'web_owner_only'} (staff on the web).
  */
 export interface GoogleLoginRequest extends LoginExtras { id_token: string }
 
 /** POST /v1/auth/logout  (any session). Revokes the calling device and clears the cookie. -> OkResponse */
 
-/** GET /v1/users  (owner) */
+// ---------------------------------------------------------------- v2: step-up, web restrictions, audit
+//
+// Owner-power routes: POST /users, PUT /users/:id (role, google_email, disabled), PUT /users/:id/password for ANOTHER
+// user, POST /devices/pair-code, POST /devices/recovery-codes, POST /devices/:id/revoke.
+//  - client 'web' sessions are refused: 403 {error:'web_forbidden'} (GET /users and GET /auth/events stay readable).
+//  - Every other caller must be stepped up: either the header `X-KK-Stepup: <client_key>` (the caller's CURRENT
+//    client_key, derived exactly as for login; verified like a login and subject to the same 5-failure backoff) or
+//    `X-KK-Recovery: <printed recovery code>` (consumed). A proof keeps the device stepped up for STEPUP_WINDOW_MIN
+//    minutes (devices.stepup_until), so the client sends the header once per batch of actions.
+//    Without a valid proof: 403 {error:'stepup_required', stepup: [...]}; a wrong one: 403 {error:'stepup_invalid'}
+//    (429 locked after 5 wrong client_keys).
+//  - Legacy paired devices (user_id NULL) step up with a recovery code. Bootstrap: while the shop has NO users at all,
+//    a legacy owner phone keeps its v1 powers (no step-up), which is how it creates the first owner user with
+//    link_me (and prints recovery codes) before accounts exist.
+//  - The app PIN is a client-side guard only; the server cannot see it. Step-up is the server's check.
+
+/** One row of the audit trail (GET /v1/auth/events, owner, newest first, at most AUTH_EVENTS_LIMIT). */
+export interface AuthEvent {
+  id: string;
+  at: string;
+  actor_device_id: string | null;
+  actor_user_id: string | null;
+  /**
+   * login.ok | login.failed | login.locked | login.refused (web_owner_only) | google.ok | google.failed | logout |
+   * stepup.ok | stepup.failed | user.create | user.update | password.change | password.reset |
+   * pair_code.mint | recovery_codes.mint | device.revoke
+   */
+  action: string;
+  target_user_id: string | null;
+  target_device_id: string | null;
+  /** Small JSON object (username, source, client, changed fields...); never credentials. */
+  detail: Record<string, unknown> | null;
+}
+export interface AuthEventsResponse extends Envelope { events: AuthEvent[] }
+
+/** GET /v1/users  (owner; web allowed) */
 export interface UsersResponse extends Envelope { users: UserInfo[] }
 
 /** Password material the client computes for a new password (fresh random 16-byte salt each time). */
@@ -401,10 +507,14 @@ export interface PasswordSet {
 }
 
 /**
- * POST /v1/users  (owner device). Creates a user of this shop. Password fields are all-or-nothing; a user without a
- * password needs google_email (Google-only). `link_me: true` (only with role 'owner', only from a device that has
- * no user yet) also attaches the CALLING device to the new user: how a v1 paired owner phone creates its login.
- * Errors: 400 bad_request, 400 already_linked, 409 username_taken, 409 google_email_taken, 403 forbidden.
+ * POST /v1/users  (owner device, step-up, not web). Creates a user of this shop. Password fields are all-or-nothing
+ * (iterations must be PBKDF2_DEFAULT_ITERATIONS); a user without a password needs google_email (Google-only).
+ * google_email must be @gmail.com / @googlemail.com, or the domain in the server's GOOGLE_HD var (400 bad_request,
+ * message 'google_email_domain'); it can be claimed for GOOGLE_EMAIL_LINK_HOURS. `link_me: true` (only with role
+ * 'owner', only from a device that has no user yet) also attaches the CALLING device to the new user: how a v1 paired
+ * owner phone creates its login (no step-up needed while the shop has no users).
+ * Errors: 400 bad_request, 400 already_linked, 409 username_taken, 409 google_email_taken, 403 forbidden,
+ * 403 web_forbidden, 403 stepup_required / stepup_invalid.
  */
 export interface CreateUserRequest extends Partial<PasswordSet> {
   username: string;
@@ -416,11 +526,12 @@ export interface CreateUserRequest extends Partial<PasswordSet> {
 export interface UserResponse extends Envelope { user: UserInfo }
 
 /**
- * PUT /v1/users/:id  (owner device). Changing google_email unlinks the old Google account.
+ * PUT /v1/users/:id  (owner device, not web; step-up when role, google_email or disabled is present).
+ * Changing google_email unlinks the old Google account and restarts the GOOGLE_EMAIL_LINK_HOURS window.
  * disabled: true revokes all of that user's devices (and the unused codes they issued) in the same transaction;
  * disabled: false re-enables the login (devices stay revoked). A role change applies to the user's live devices.
  * Errors: 400 cannot_change_own_role, 400 cannot_disable_self, 409 last_owner (would leave no enabled owner user),
- * 409 google_email_taken, 404 not_found.
+ * 409 google_email_taken, 404 not_found, 403 web_forbidden, 403 stepup_required / stepup_invalid.
  */
 export interface UpdateUserRequest {
   display_name?: string;
@@ -430,8 +541,9 @@ export interface UpdateUserRequest {
 }
 
 /**
- * PUT /v1/users/:id/password. An owner device may set anyone's password (the user's devices are revoked); any
- * signed-in user may change their OWN password with current_client_key (derived with the CURRENT salt/iterations
- * from prelogin); their other devices are revoked. Errors: 403 forbidden, 403 invalid_login (wrong current key).
+ * PUT /v1/users/:id/password. Any signed-in user (web included) may change their OWN password with
+ * current_client_key (derived with the CURRENT salt from prelogin); their other devices are revoked. An owner device
+ * (step-up, not web) may reset ANOTHER user's password; that user's devices are revoked.
+ * Errors: 403 forbidden, 403 invalid_login (wrong current key), 403 web_forbidden, 403 stepup_required.
  */
 export interface SetPasswordRequest extends PasswordSet { current_client_key?: string }

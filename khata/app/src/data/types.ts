@@ -132,6 +132,8 @@ export const META_KEYS = [
   'onboarded',
   /** "<shop_id> <sync_epoch>" of the server this phone was paired with before the last unpair (see completePairing). */
   'last_pairing',
+  /** Voice entry (v2, local only): JSON prefs {on, lang, bare, notice_ok} and the accuracy counters {heard, saved, ...}. */
+  'voice_prefs', 'voice_stats',
 ] as const;
 export type MetaKey = (typeof META_KEYS)[number];
 

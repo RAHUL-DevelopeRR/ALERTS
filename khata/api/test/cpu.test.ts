@@ -1,6 +1,9 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { GOOGLE_JWKS_URL, resetGoogleKeyCache, verifyGoogleIdToken } from '../src/lib/google';
+import { knownDeviceValue, verifyKnownDevice } from '../src/lib/lockout';
+import { checkNonce, mintNonce } from '../src/lib/nonce';
 import { checkClientKey, fakeSalt, passwordVerifier } from '../src/lib/password';
+import { env } from 'cloudflare:test';
 import { b64url, login, ownerWithUser, realClientKey } from './accounts-helpers';
 
 /**
@@ -29,6 +32,26 @@ describe('free-plan CPU budget', () => {
     console.log(`cpu: verifier+compare ${(verify * 1000).toFixed(1)} us, fake salt ${(salt * 1000).toFixed(1)} us`);
     expect(verify).toBeLessThan(1);
     expect(salt).toBeLessThan(1);
+  });
+
+  it('nonce mint + check and the known-device MAC take well under 1 ms (step-up = one password check)', async () => {
+    const mint = await time(300, () => mintNonce(PEPPER, new Date()));
+    const nonce = await mintNonce(PEPPER, new Date());
+    const check = await time(300, () => checkNonce(PEPPER, nonce, new Date()));
+    const id = crypto.randomUUID();
+    const known = await knownDeviceValue(PEPPER, id);
+    const knownMac = await time(300, () => knownDeviceValue(PEPPER, id));
+    // the full known-device check includes one indexed D1 SELECT (I/O, not CPU)
+    const t0 = performance.now();
+    await verifyKnownDevice(env.DB, PEPPER, known, 'nobody');
+    const knownFull = performance.now() - t0;
+    console.log(
+      `cpu: nonce mint ${(mint * 1000).toFixed(1)} us, nonce check ${(check * 1000).toFixed(1)} us, known-device MAC ${(knownMac * 1000).toFixed(1)} us ` +
+        `(full check incl. D1 ${knownFull.toFixed(2)} ms wall)`,
+    );
+    expect(mint).toBeLessThan(1);
+    expect(check).toBeLessThan(1);
+    expect(knownMac).toBeLessThan(1);
   });
 
   it('Google RS256 verification takes well under 2 ms (JWKS import under 5 ms)', async () => {

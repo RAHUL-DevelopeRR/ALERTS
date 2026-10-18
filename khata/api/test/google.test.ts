@@ -2,7 +2,8 @@ import { createExecutionContext, env, waitOnExecutionContext } from 'cloudflare:
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import app from '../src/index';
 import { GOOGLE_JWKS_URL, resetGoogleKeyCache, verifyGoogleIdToken } from '../src/lib/google';
-import { b64url, createUser, ownerWithUser, sessionCookie, webCall } from './accounts-helpers';
+import { mintNonce } from '../src/lib/nonce';
+import { b64url, createUser, login, OWNER, ownerStepup, ownerWithUser, passwordSet, sessionCookie, webCall } from './accounts-helpers';
 import { call, customer, push } from './helpers';
 
 const WEB_AUD = 'web-client.apps.googleusercontent.com';
@@ -26,7 +27,16 @@ async function makeSigner(kid: string): Promise<Signer> {
 
 const enc = (o: unknown) => b64url(new TextEncoder().encode(JSON.stringify(o)));
 
+/** A fresh single-use nonce from the Worker (what the web app passes to Google Identity Services). */
+export async function freshNonce(): Promise<string> {
+  const r = await call<{ nonce: string }>('POST', '/auth/nonce');
+  if (r.status !== 200) throw new Error(`nonce failed ${r.status}`);
+  return r.body.nonce;
+}
+
+/** Signs an ID token; unless the claims name a `nonce` (even undefined), a fresh one from /auth/nonce is used. */
 async function sign(signer: Signer, claims: Record<string, unknown>, header: Record<string, unknown> = {}): Promise<string> {
+  if (!('nonce' in claims)) claims = { ...claims, nonce: await freshNonce() };
   const h = enc({ alg: 'RS256', typ: 'JWT', kid: signer.kid, ...header });
   const p = enc(claims);
   const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', signer.key, new TextEncoder().encode(`${h}.${p}`));
@@ -39,7 +49,7 @@ const claims = (over: Record<string, unknown> = {}) => ({
   aud: WEB_AUD,
   azp: WEB_AUD,
   sub: '1000000000000000001',
-  email: 'kumar@example.com',
+  email: 'kumar@gmail.com',
   email_verified: true,
   name: 'Kumar',
   iat: nowS() - 10,
@@ -85,12 +95,12 @@ const google = (id_token: string, extra: Record<string, unknown> = {}) =>
 describe('POST /auth/google', () => {
   it('signs in a pre-registered email once, links google_sub, and then signs in by sub', async () => {
     const { o } = await ownerWithUser();
-    const u = await createUser(o.token, 'kumar', null, { google_email: 'Kumar@Example.com' });
-    const r = await google(await sign(k1, claims({ email: 'KUMAR@example.com' })));
+    const u = await createUser(o.token, 'kumar', null, { google_email: 'Kumar@GMail.com', role: 'owner' });
+    const r = await google(await sign(k1, claims({ email: 'KUMAR@gmail.com' })));
     expect(r.status).toBe(200);
     expect(r.body.token).toBeNull();
-    expect(r.body.user).toEqual({ id: u.id, username: 'kumar', display_name: 'kumar', role: 'staff' });
-    expect(r.body.role).toBe('staff');
+    expect(r.body.user).toEqual({ id: u.id, username: 'kumar', display_name: 'kumar', role: 'owner' });
+    expect(r.body.role).toBe('owner');
     const sc = r.headers.get('Set-Cookie') ?? '';
     expect(sc).toMatch(/HttpOnly/i);
     expect(sc).toMatch(/SameSite=Strict/i);
@@ -100,7 +110,9 @@ describe('POST /auth/google', () => {
     // the session works, and the device syncs
     const cookie = sessionCookie(r);
     expect((await webCall('GET', '/me', cookie)).body.user.id).toBe(u.id);
-    const pushed = await webCall('POST', '/sync/push', cookie, { body: { customers: [customer({ code: r.body.code_block.start })], entries: [] } });
+    expect(r.body.code_block).toBeNull(); // the web never creates customers offline
+    const wb = await webCall('POST', '/devices/code-block', cookie, { body: {} });
+    const pushed = await webCall('POST', '/sync/push', cookie, { body: { customers: [customer({ code: wb.body.start })], entries: [] } });
     expect(pushed.body.results[0].status).toBe('stored');
     // android client gets a bearer token; the Android client id is an accepted audience
     const a = await google(await sign(k1, claims({ aud: ANDROID_AUD })), { client: 'android' });
@@ -113,7 +125,7 @@ describe('POST /auth/google', () => {
 
   it('refuses bad tokens with 403 invalid_token', async () => {
     const { o } = await ownerWithUser();
-    await createUser(o.token, 'kumar', null, { google_email: 'kumar@example.com' });
+    await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'owner' });
     const cases: Array<[string, string]> = [
       ['aud', await sign(k1, claims({ aud: 'someone-else.apps.googleusercontent.com' }))],
       ['iss', await sign(k1, claims({ iss: 'https://evil.example' }))],
@@ -136,7 +148,7 @@ describe('POST /auth/google', () => {
     // a token tampered after signing
     const good = await sign(k1, claims());
     const [h, , s] = good.split('.');
-    const forged = `${h}.${enc(claims({ email: 'owner@example.com' }))}.${s}`;
+    const forged = `${h}.${enc(claims({ email: 'owner@gmail.com', nonce: 'x' }))}.${s}`;
     expect((await google(forged)).body.message).toBe('signature');
     // within the 5 minute skew is fine
     expect((await google(await sign(k1, claims({ exp: nowS() - 200 })))).status).toBe(200);
@@ -145,7 +157,7 @@ describe('POST /auth/google', () => {
 
   it('never creates users: an unknown email answers 403 not_linked', async () => {
     await ownerWithUser();
-    const r = await google(await sign(k1, claims({ email: 'stranger@example.com', sub: '999' })));
+    const r = await google(await sign(k1, claims({ email: 'stranger@gmail.com', sub: '999' })));
     expect(r.status).toBe(403);
     expect(r.body.error).toBe('not_linked');
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first('n')).toBe(1);
@@ -153,7 +165,7 @@ describe('POST /auth/google', () => {
 
   it('a second Google account (other sub) with the same email is refused once linked', async () => {
     const { o } = await ownerWithUser();
-    await createUser(o.token, 'kumar', null, { google_email: 'kumar@example.com' });
+    await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'owner' });
     expect((await google(await sign(k1, claims({ sub: 'sub-A' })))).status).toBe(200);
     const second = await google(await sign(k1, claims({ sub: 'sub-B' })));
     expect(second.status).toBe(403);
@@ -163,19 +175,19 @@ describe('POST /auth/google', () => {
 
   it('a disabled user cannot sign in with Google; changing google_email unlinks', async () => {
     const { o } = await ownerWithUser();
-    const u = await createUser(o.token, 'kumar', 'k-pass', { google_email: 'kumar@example.com' });
+    const u = await createUser(o.token, 'kumar', 'k-pass', { google_email: 'kumar@gmail.com', role: 'owner' });
     expect((await google(await sign(k1, claims({ sub: 'sub-A' })))).status).toBe(200);
-    await call('PUT', `/users/${u.id}`, { token: o.token, body: { disabled: true } });
+    expect((await call('PUT', `/users/${u.id}`, { token: o.token, headers: await ownerStepup(), body: { disabled: true } })).status).toBe(200);
     expect((await google(await sign(k1, claims({ sub: 'sub-A' })))).body.error).toBe('not_linked');
-    await call('PUT', `/users/${u.id}`, { token: o.token, body: { disabled: false, google_email: 'kumar.new@example.com' } });
+    expect((await call('PUT', `/users/${u.id}`, { token: o.token, body: { disabled: false, google_email: 'kumar.new@gmail.com' } })).status).toBe(200);
     expect((await google(await sign(k1, claims({ sub: 'sub-A' })))).body.error).toBe('not_linked');
-    const relinked = await google(await sign(k1, claims({ sub: 'sub-C', email: 'kumar.new@example.com' })));
+    const relinked = await google(await sign(k1, claims({ sub: 'sub-C', email: 'kumar.new@gmail.com' })));
     expect(relinked.status).toBe(200);
   });
 
   it('refetches the JWKS once when Google rotates keys (unknown kid, at most once a minute)', async () => {
     const { o } = await ownerWithUser();
-    await createUser(o.token, 'kumar', null, { google_email: 'kumar@example.com' });
+    await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'owner' });
     expect((await google(await sign(k1, claims()))).status).toBe(200);
     expect(jwksFetches).toBe(1);
     published = [k1, k2];
@@ -210,6 +222,146 @@ describe('POST /auth/google', () => {
   });
 });
 
+describe('Google hardening (C, D, F)', () => {
+  it('C. google_email must be a Google-owned domain (or GOOGLE_HD); setting it needs step-up and is audited', async () => {
+    const { o } = await ownerWithUser();
+    const base = { username: 'newbie', display_name: 'N', role: 'staff' };
+    for (const bad of ['kumar@yahoo.com', 'kumar@rediffmail.com', 'kumar@gmail.com.evil.in', 'kumar@murugan-stores.in.example']) {
+      const r = await call('POST', '/users', { token: o.token, body: { ...base, google_email: bad } });
+      expect(r.status, bad).toBe(400);
+      expect(r.body.message, bad).toBe('google_email_domain');
+    }
+    const hdr = await ownerStepup(); // the bad ones above were refused by validation, before step-up
+    for (const good of ['Kumar@Gmail.com', 'kumar@googlemail.com', 'kumar@Murugan-Stores.in']) {
+      const r = await call('POST', '/users', { token: o.token, headers: hdr, body: { ...base, username: `u${good.length}${good.indexOf('@')}`, google_email: good } });
+      expect(r.status, good).toBe(200);
+      expect(r.body.user.google_email).toBe(good.toLowerCase());
+      expect(r.body.user.google_email_expires_at).toBeTruthy();
+    }
+    const u = await createUser(o.token, 'selvi', 's-pass');
+    expect(u.google_email_expires_at).toBeNull();
+    await env.DB.prepare(`UPDATE devices SET stepup_until = NULL WHERE id = ?`).bind(o.device_id).run();
+    const need = await call('PUT', `/users/${u.id}`, { token: o.token, body: { google_email: 'selvi@gmail.com' } });
+    expect(need.status).toBe(403);
+    expect(need.body.error).toBe('stepup_required');
+    const bad = await call('PUT', `/users/${u.id}`, { token: o.token, headers: await ownerStepup(), body: { google_email: 'selvi@hotmail.com' } });
+    expect(bad.body.message).toBe('google_email_domain'); // validation runs before step-up: no window opened
+    const ok = await call('PUT', `/users/${u.id}`, { token: o.token, headers: await ownerStepup(), body: { google_email: 'selvi@gmail.com' } });
+    expect(ok.status).toBe(200);
+    const hours = (Date.parse(ok.body.user.google_email_expires_at) - Date.now()) / 3_600_000;
+    expect(hours).toBeGreaterThan(47.9);
+    expect(hours).toBeLessThanOrEqual(48);
+    const ev = await env.DB.prepare(`SELECT detail FROM auth_events WHERE action = 'user.update' AND target_user_id = ?`).bind(u.id).first<string>('detail');
+    expect(JSON.parse(ev!)).toEqual({ google_email: 'selvi@gmail.com' });
+  });
+
+  it('C. an unlinked pre-registered address expires after 48 h; a linked one does not', async () => {
+    const { o } = await ownerWithUser();
+    const u = await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'owner' });
+    const old = new Date(Date.now() - 49 * 3_600_000).toISOString();
+    await env.DB.prepare('UPDATE users SET google_email_set_at = ? WHERE id = ?').bind(old, u.id).run();
+    const late = await google(await sign(k1, claims()));
+    expect(late.status).toBe(403);
+    expect(late.body.error).toBe('not_linked');
+    expect(await env.DB.prepare('SELECT google_sub FROM users WHERE id = ?').bind(u.id).first('google_sub')).toBeNull();
+    // the owner sets it again: a fresh window
+    expect((await call('PUT', `/users/${u.id}`, { token: o.token, headers: await ownerStepup(), body: { google_email: 'kumar@gmail.com' } })).status).toBe(200);
+    expect((await google(await sign(k1, claims()))).status).toBe(200);
+    // once linked by sub the age of the pre-registration no longer matters
+    await env.DB.prepare('UPDATE users SET google_email_set_at = ? WHERE id = ?').bind(old, u.id).run();
+    expect((await google(await sign(k1, claims()))).status).toBe(200);
+    const list = await call('GET', '/users', { token: o.token });
+    expect(list.body.users.find((x: { id: string }) => x.id === u.id).google_email_expires_at).toBeNull();
+  });
+
+  it('C. the ID token must carry a live, unused nonce from POST /auth/nonce', async () => {
+    const { o } = await ownerWithUser();
+    await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'owner' });
+    const n = await call('POST', '/auth/nonce');
+    expect(n.status).toBe(200);
+    expect(n.body.nonce).toMatch(/^[A-Za-z0-9_-]{22}\.\d+\.[0-9a-f]{32}$/);
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['missing', { nonce: undefined }],
+      ['garbage', { nonce: 'not-a-nonce' }],
+      ['tampered', { nonce: `${n.body.nonce.slice(0, -1)}${n.body.nonce.endsWith('0') ? '1' : '0'}` }],
+      ['expired', { nonce: await mintNonce('test-pepper', new Date(Date.now() - 11 * 60_000)) }],
+      ['other pepper', { nonce: await mintNonce('another-pepper', new Date()) }],
+    ];
+    for (const [why, over] of cases) {
+      const r = await google(await sign(k1, claims(over)));
+      expect(r.status, why).toBe(403);
+      expect(r.body, why).toEqual({ error: 'invalid_token', message: 'nonce' });
+    }
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM devices WHERE client = ?').bind('web').first('n')).toBe(0);
+    // a good one works once: the same token replayed (or another token with the same nonce) is refused
+    const token = await sign(k1, claims({ nonce: n.body.nonce }));
+    expect((await google(token)).status).toBe(200);
+    const replay = await google(token);
+    expect(replay.status).toBe(403);
+    expect(replay.body.message).toBe('nonce');
+    expect((await google(await sign(k1, claims({ nonce: n.body.nonce })))).body.message).toBe('nonce');
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM used_nonces').first('n')).toBe(1);
+    // a nonce consumed by a sign-in that then fails (not_linked) is spent too
+    const n2 = await call('POST', '/auth/nonce');
+    expect((await google(await sign(k1, claims({ nonce: n2.body.nonce, email: 'nobody@gmail.com', sub: '7' })))).body.error).toBe('not_linked');
+    expect((await google(await sign(k1, claims({ nonce: n2.body.nonce })))).body.message).toBe('nonce');
+  });
+
+  it('D. staff on the web via Google is refused (403 web_owner_only); the phone app works', async () => {
+    const { o } = await ownerWithUser();
+    await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'staff' });
+    const w = await google(await sign(k1, claims()));
+    expect(w.status).toBe(403);
+    expect(w.body).toEqual({ error: 'web_owner_only' });
+    expect(w.headers.get('Set-Cookie')).toBeNull();
+    const a = await google(await sign(k1, claims({ aud: ANDROID_AUD })), { client: 'android' });
+    expect(a.status).toBe(200);
+    expect(a.body.role).toBe('staff');
+  });
+
+  it('F. client android accepts only GOOGLE_ANDROID_CLIENT_IDS audiences; web never accepts the android id', async () => {
+    const { o } = await ownerWithUser();
+    await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'owner' });
+    const webTokenOnAndroid = await google(await sign(k1, claims({ aud: WEB_AUD })), { client: 'android' });
+    expect(webTokenOnAndroid.status).toBe(403);
+    expect(webTokenOnAndroid.body.message).toBe('aud');
+    const androidTokenOnWeb = await google(await sign(k1, claims({ aud: ANDROID_AUD })), { client: 'web' });
+    expect(androidTokenOnWeb.status).toBe(403);
+    expect(androidTokenOnWeb.body.message).toBe('aud');
+    const ok = await google(await sign(k1, claims({ aud: ANDROID_AUD })), { client: 'android' });
+    expect(ok.status).toBe(200);
+    expect(ok.body.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(ok.body.code_block).not.toBeNull();
+    // with no Android ids configured, android Google logins are 404 while the web still works
+    const ctx = createExecutionContext();
+    const res = await app.fetch(
+      new Request('https://kadan.test/v1/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: await sign(k1, claims({ aud: ANDROID_AUD })), device_name: 'Phone', client: 'android' }),
+      }),
+      { ...env, GOOGLE_ANDROID_CLIENT_IDS: '' },
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(res.status).toBe(404);
+    expect((await google(await sign(k1, claims()))).status).toBe(200);
+  });
+
+  it('F. a Google web login gets no code block and the known-device cookie; password users unaffected', async () => {
+    const { o } = await ownerWithUser();
+    await createUser(o.token, 'kumar', null, { google_email: 'kumar@gmail.com', role: 'owner' });
+    const r = await google(await sign(k1, claims()));
+    expect(r.status).toBe(200);
+    expect(r.body.code_block).toBeNull();
+    expect(r.body.known_device).toMatch(new RegExp(`^${r.body.device_id}\\.[0-9a-f]{64}$`));
+    expect(r.headers.get('Set-Cookie') ?? '').toMatch(/kk_known=/);
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n FROM code_blocks`).first('n')).toBe(1); // only the paired phone's
+    expect((await login(OWNER.username, OWNER.password)).body.code_block).not.toBeNull();
+    expect((await passwordSet('x')).iterations).toBe(600_000);
+  });
+});
+
 describe('Google sign-in switched off', () => {
   async function direct(path: string, init: RequestInit = {}) {
     const ctx = createExecutionContext();
@@ -226,6 +378,11 @@ describe('Google sign-in switched off', () => {
       body: JSON.stringify({ id_token: token, device_name: 'Chrome', client: 'web' }),
     });
     expect(r.status).toBe(404);
+    // and no nonce is handed out while every list is empty
+    const ctx = createExecutionContext();
+    const n = await app.fetch(new Request('https://kadan.test/v1/auth/nonce', { method: 'POST' }), { ...env, GOOGLE_CLIENT_IDS: '', GOOGLE_ANDROID_CLIENT_IDS: '' }, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(n.status).toBe(404);
     const cfg = await direct('/config');
     expect(cfg.status).toBe(200);
     expect(cfg.body.google_client_id).toBeNull();
@@ -237,7 +394,7 @@ describe('verifyGoogleIdToken (unit)', () => {
   it('accepts both issuer spellings and an aud array', async () => {
     for (const iss of ['accounts.google.com', 'https://accounts.google.com']) {
       const v = await verifyGoogleIdToken(await sign(k1, claims({ iss })), [WEB_AUD]);
-      expect(v).toEqual({ ok: true, identity: { sub: '1000000000000000001', email: 'kumar@example.com', name: 'Kumar' } });
+      expect(v).toEqual({ ok: true, identity: { sub: '1000000000000000001', email: 'kumar@gmail.com', name: 'Kumar', nonce: expect.any(String) } });
     }
     const arr = await verifyGoogleIdToken(await sign(k1, claims({ aud: ['x', WEB_AUD] })), [WEB_AUD]);
     expect(arr.ok).toBe(true);

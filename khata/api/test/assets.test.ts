@@ -16,6 +16,13 @@ describe('web app (Workers static assets)', () => {
     expect(csp).toContain("default-src 'self'");
     expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client");
     expect(csp).toContain("frame-ancestors 'none'");
+    // Google Identity Services (F20): script, its stylesheet, its XHR and its iframe; sql.js needs wasm-unsafe-eval
+    expect(csp).toContain("'wasm-unsafe-eval'");
+    expect(csp).toContain('https://accounts.google.com/gsi/client');
+    expect(csp).toContain("style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style");
+    expect(csp).toContain("connect-src 'self' https://accounts.google.com");
+    expect(csp).toContain('frame-src https://accounts.google.com');
+    expect(csp).toContain("base-uri 'none'");
     expect(csp).toContain("object-src 'none'");
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');

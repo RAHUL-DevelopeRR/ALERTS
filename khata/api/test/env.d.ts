@@ -9,6 +9,8 @@ declare namespace Cloudflare {
     AUTH_LIMITER: RateLimit;
     AUTH_THROTTLE_AFTER: string;
     GOOGLE_CLIENT_IDS: string;
+    GOOGLE_ANDROID_CLIENT_IDS: string;
+    GOOGLE_HD: string;
     ASSETS: Fetcher;
     TEST_MIGRATIONS: import('cloudflare:test').D1Migration[];
   }

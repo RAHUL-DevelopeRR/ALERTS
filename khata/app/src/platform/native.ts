@@ -165,7 +165,14 @@ export function createNativePlatform(): Platform {
     isNative: true,
 
     get speech(): Speech {
-      if (!speech) speech = createNativeSpeech();
+      if (!speech) {
+        const s = createNativeSpeech();
+        speech = s;
+        // The plugin keeps listening in the background until Android cuts the mic; end the session cleanly instead.
+        onAppState((active) => {
+          if (!active) void s.stop();
+        });
+      }
       return speech;
     },
 

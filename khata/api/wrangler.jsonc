@@ -37,9 +37,14 @@
     "PAIR_THROTTLE_AFTER": "20",
     // Wrong password logins per UTC day (whole shop) before the 1-per-30-s throttle.
     "AUTH_THROTTLE_AFTER": "100",
-    // Google sign-in: comma-separated OAuth client ids (the FIRST is the web client id shown to the browser).
-    // Empty = Google sign-in off (/v1/auth/google answers 404, /v1/config returns google_client_id: null).
-    "GOOGLE_CLIENT_IDS": ""
+    // Google sign-in on the web: comma-separated WEB OAuth client ids (the FIRST is shown to the browser).
+    // Empty = Google sign-in off on the web (/v1/auth/google answers 404, /v1/config returns google_client_id: null).
+    "GOOGLE_CLIENT_IDS": "",
+    // Google sign-in from the Android app (Credential Manager): the shop's Android/server OAuth client ids.
+    // Empty = Android Google logins are refused with 404 (web client ids are never accepted for client 'android').
+    "GOOGLE_ANDROID_CLIENT_IDS": "",
+    // Optional Google Workspace domain whose addresses may be pre-registered besides @gmail.com / @googlemail.com.
+    "GOOGLE_HD": ""
   }
   // Secrets (never in this file):
   //   npx wrangler secret put PEPPER      (required)

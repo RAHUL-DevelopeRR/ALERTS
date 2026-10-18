@@ -6,12 +6,14 @@ import {
   fastClientKey,
   ITER,
   login,
+  ownerStepup,
   ownerWithUser,
   passwordSet,
   prelogin,
   randomSalt,
   realClientKey,
   sessionCookie,
+  stepup,
   webCall,
 } from './accounts-helpers';
 import { addDevice, call, customer, entry, owner, pair, pull, push } from './helpers';
@@ -36,15 +38,16 @@ describe('config and prelogin', () => {
 
   it('returns the stored salt for a real user and a deterministic fake one otherwise, same shape', async () => {
     const { o } = await ownerWithUser();
-    const set = await passwordSet('pw-for-kumar', 700_000);
+    const set = await passwordSet('pw-for-kumar');
     const made = await call('POST', '/users', {
       token: o.token,
+      headers: await ownerStepup(),
       body: { username: 'kumar', display_name: 'Kumar', role: 'staff', ...set },
     });
     expect(made.status).toBe(200);
     const real = await prelogin('kumar');
     expect(real.status).toBe(200);
-    expect(real.body).toEqual({ salt: set.salt, iterations: 700_000 });
+    expect(real.body).toEqual({ salt: set.salt, iterations: ITER });
     // case and spaces are normalised
     expect((await prelogin('  KUMAR ')).body).toEqual(real.body);
 
@@ -91,8 +94,10 @@ describe('password login', () => {
     expect(r.body.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(r.body.role).toBe('owner');
     expect(r.body.shop.id).toBe(o.shop.id);
-    expect(r.body.code_block.end - r.body.code_block.start + 1).toBe(CODE_BLOCK_SIZE);
-    expect(r.body.code_block.start).toBeGreaterThan(120);
+    expect(r.body.code_block!.end - r.body.code_block!.start + 1).toBe(CODE_BLOCK_SIZE);
+    expect(r.body.code_block!.start).toBeGreaterThan(120);
+    expect(r.body.known_device).toMatch(new RegExp(`^${r.body.device_id}\\.[0-9a-f]{64}$`));
+    expect(r.body.expires_at).toBeNull();
     expect(typeof r.body.sync_epoch).toBe('string');
     expect(r.body.user).toEqual({ id: user.id, username: 'ravi', display_name: 'Ravi', role: 'owner' });
     expect(r.headers.get('Set-Cookie')).toBeNull();
@@ -109,10 +114,11 @@ describe('password login', () => {
   it('works with the real PBKDF2 derivation the app uses', async () => {
     const { o } = await ownerWithUser();
     const salt = randomSalt();
-    const client_key = await realClientKey('கடை-password-1', salt, 300_000);
+    const client_key = await realClientKey('கடை-password-1', salt, ITER);
     const made = await call('POST', '/users', {
       token: o.token,
-      body: { username: 'selvi', display_name: 'Selvi', role: 'staff', salt, iterations: 300_000, client_key },
+      headers: await ownerStepup(),
+      body: { username: 'selvi', display_name: 'Selvi', role: 'staff', salt, iterations: ITER, client_key },
     });
     expect(made.status).toBe(200);
     const p = await prelogin('selvi');
@@ -147,7 +153,7 @@ describe('password login', () => {
     ];
     for (const b of bad) expect((await call('POST', '/auth/login', b)).status).toBe(400);
     expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM auth_failures').first('n')).toBe(0);
-    expect(await env.DB.prepare(`SELECT failed_count FROM users WHERE username = 'ravi'`).first('failed_count')).toBe(0);
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM login_locks').first('n')).toBe(0);
   });
 
   it('locks a username after 5 failures with exponential backoff, never permanently; success resets', async () => {
@@ -159,29 +165,29 @@ describe('password login', () => {
     expect(locked.body.retry_after).toBeGreaterThan(20);
     expect(locked.body.retry_after).toBeLessThanOrEqual(30);
     expect(locked.headers.get('Retry-After')).toBe(String(locked.body.retry_after));
+    // the lock is keyed on (username, source); without CF-Connecting-IP the source is 'unknown'
+    const LOCK = `FROM login_locks WHERE username = 'ravi' AND source = 'unknown'`;
     // the lock expires (simulate the 30 s passing); the next failure doubles it
-    await env.DB.prepare(`UPDATE users SET locked_until = '2000-01-01T00:00:00.000Z' WHERE username = 'ravi'`).run();
+    await env.DB.prepare(`UPDATE login_locks SET locked_until = '2000-01-01T00:00:00.000Z' WHERE username = 'ravi'`).run();
     expect((await login('ravi', 'bad-guess')).status).toBe(403);
-    const lock2 = await env.DB.prepare(`SELECT failed_count, locked_until FROM users WHERE username = 'ravi'`).first<{
-      failed_count: number;
-      locked_until: string;
-    }>();
+    const lock2 = await env.DB.prepare(`SELECT failed_count, locked_until ${LOCK}`).first<{ failed_count: number; locked_until: string }>();
     expect(lock2?.failed_count).toBe(6);
     const secs = (Date.parse(lock2!.locked_until) - Date.now()) / 1000;
     expect(secs).toBeGreaterThan(50);
     expect(secs).toBeLessThanOrEqual(60);
     // capped at 15 minutes
-    await env.DB.prepare(`UPDATE users SET failed_count = 20, locked_until = NULL WHERE username = 'ravi'`).run();
+    await env.DB.prepare(`UPDATE login_locks SET failed_count = 20, locked_until = NULL WHERE username = 'ravi'`).run();
     expect((await login('ravi', 'bad-guess')).status).toBe(403);
-    const cap = await env.DB.prepare(`SELECT locked_until FROM users WHERE username = 'ravi'`).first<string>('locked_until');
+    const cap = await env.DB.prepare(`SELECT locked_until ${LOCK}`).first<string>('locked_until');
     const capSecs = (Date.parse(cap!) - Date.now()) / 1000;
     expect(capSecs).toBeGreaterThan(890);
     expect(capSecs).toBeLessThanOrEqual(900);
     // after it expires the right password works and resets the counter
-    await env.DB.prepare(`UPDATE users SET locked_until = '2000-01-01T00:00:00.000Z' WHERE username = 'ravi'`).run();
+    await env.DB.prepare(`UPDATE login_locks SET locked_until = '2000-01-01T00:00:00.000Z' WHERE username = 'ravi'`).run();
     expect((await login('ravi', password)).status).toBe(200);
+    expect(await env.DB.prepare(`SELECT COUNT(*) AS n ${LOCK}`).first('n')).toBe(0);
+    // the user row's legacy counters are untouched (login_locks is the only lock now)
     expect(await env.DB.prepare(`SELECT failed_count FROM users WHERE username = 'ravi'`).first('failed_count')).toBe(0);
-    expect(await env.DB.prepare(`SELECT locked_until FROM users WHERE username = 'ravi'`).first('locked_until')).toBeNull();
   });
 
   it('locks unknown usernames the same way (a lockout does not reveal that a user exists)', async () => {
@@ -218,12 +224,12 @@ describe('password login', () => {
   it('a disabled user or a user without a password cannot log in and gets the fake salt', async () => {
     const { o } = await ownerWithUser();
     const staff = await createUser(o.token, 'kumar', 'kumar-pass');
-    const googleOnly = await createUser(o.token, 'gonly', null, { google_email: 'g.only@example.com' });
+    const googleOnly = await createUser(o.token, 'gonly', null, { google_email: 'g.only@gmail.com' });
     expect(googleOnly.has_password).toBe(false);
     const realSalt = (await prelogin('kumar')).body.salt;
     const dev = await login('kumar', 'kumar-pass');
     expect(dev.status).toBe(200);
-    expect((await call('PUT', `/users/${staff.id}`, { token: o.token, body: { disabled: true } })).status).toBe(200);
+    expect((await call('PUT', `/users/${staff.id}`, { token: o.token, headers: await ownerStepup(), body: { disabled: true } })).status).toBe(200);
     expect((await prelogin('kumar')).body.salt).not.toBe(realSalt);
     expect((await login('kumar', 'kumar-pass')).status).toBe(403);
     expect((await call('GET', '/me', { token: dev.body.token! })).body.error).toBe('revoked');
@@ -334,8 +340,8 @@ describe('logout', () => {
 describe('user management', () => {
   it('owner creates, lists and edits users; staff devices are forbidden', async () => {
     const { o, user } = await ownerWithUser();
-    const staff = await createUser(o.token, 'kumar', 'kumar-pass', { display_name: 'Kumar', google_email: 'Kumar@Example.com' });
-    expect(staff).toMatchObject({ username: 'kumar', role: 'staff', google_email: 'kumar@example.com', google_linked: false, has_password: true, disabled_at: null });
+    const staff = await createUser(o.token, 'kumar', 'kumar-pass', { display_name: 'Kumar', google_email: 'Kumar@GMail.com' });
+    expect(staff).toMatchObject({ username: 'kumar', role: 'staff', google_email: 'kumar@gmail.com', google_linked: false, has_password: true, disabled_at: null });
     const list = await call('GET', '/users', { token: o.token });
     expect(list.status).toBe(200);
     expect(list.body.users.map((u: { id: string }) => u.id)).toEqual([user.id, staff.id]);
@@ -354,18 +360,19 @@ describe('user management', () => {
 
   it('refuses duplicates, bad password material and bad link_me', async () => {
     const { o } = await ownerWithUser();
-    const dup = await call('POST', '/users', { token: o.token, body: { username: 'RAVI', display_name: 'R2', role: 'staff', ...(await passwordSet('p')) } });
+    const dup = await call('POST', '/users', { token: o.token, headers: await ownerStepup(), body: { username: 'RAVI', display_name: 'R2', role: 'staff', ...(await passwordSet('p')) } });
     expect(dup.status).toBe(409);
     expect(dup.body.error).toBe('username_taken');
-    await createUser(o.token, 'kumar', 'p', { google_email: 'k@example.com' });
-    const dupMail = await call('POST', '/users', { token: o.token, body: { username: 'kumar2', display_name: 'K2', role: 'staff', google_email: 'K@example.com' } });
+    await createUser(o.token, 'kumar', 'p', { google_email: 'k@gmail.com' });
+    const dupMail = await call('POST', '/users', { token: o.token, body: { username: 'kumar2', display_name: 'K2', role: 'staff', google_email: 'K@gmail.com' } });
     expect(dupMail.status).toBe(409);
     expect(dupMail.body.error).toBe('google_email_taken');
     const base = { username: 'newbie', display_name: 'N', role: 'staff' };
     const good = await passwordSet('p');
     for (const bad of [
-      { ...good, iterations: 299_999 },
-      { ...good, iterations: 2_000_001 },
+      { ...good, iterations: 599_999 }, // only the default count is stored (F12)
+      { ...good, iterations: 700_000 },
+      { ...good, iterations: 2_000_000 },
       { ...good, iterations: 600_000.5 },
       { ...good, salt: good.salt.slice(0, 21) },
       { ...good, salt: `${good.salt}AA` },
@@ -375,8 +382,7 @@ describe('user management', () => {
     ]) {
       expect((await call('POST', '/users', { token: o.token, body: { ...base, ...bad } })).status).toBe(400);
     }
-    expect((await call('POST', '/users', { token: o.token, body: { ...base, ...good, iterations: 300_000 } })).status).toBe(200);
-    expect((await call('POST', '/users', { token: o.token, body: { ...base, username: 'maxi', ...good, iterations: 2_000_000 } })).status).toBe(200);
+    expect((await call('POST', '/users', { token: o.token, body: { ...base, ...good } })).status).toBe(200);
     // link_me: staff role refused, and a device already linked cannot link again
     expect((await call('POST', '/users', { token: o.token, body: { ...base, username: 'l1x', ...good, link_me: true } })).status).toBe(400);
     const again = await call('POST', '/users', { token: o.token, body: { ...base, username: 'l2x', role: 'owner', ...good, link_me: true } });
@@ -391,9 +397,12 @@ describe('user management', () => {
     expect(self.status).toBe(400);
     expect(self.body.error).toBe('cannot_change_own_role');
     expect((await call('PUT', `/users/${user.id}`, { token: o.token, body: { disabled: true } })).body.error).toBe('cannot_disable_self');
-    // another owner phone (paired, no user) cannot demote or disable the only owner user
-    const other = await addDevice(o.token, 'owner', 'Owner tablet');
-    const demote = await call('PUT', `/users/${user.id}`, { token: other.token, body: { role: 'staff' } });
+    // another owner phone (paired, no user; steps up with a printed recovery code) cannot demote or disable the only
+    // owner user
+    const other = await addDevice(o.token, 'owner', 'Owner tablet', await ownerStepup());
+    const rc = await call('POST', '/devices/recovery-codes', { token: o.token, body: {} });
+    expect(rc.status).toBe(200);
+    const demote = await call('PUT', `/users/${user.id}`, { token: other.token, headers: { 'X-KK-Recovery': rc.body.codes[0] }, body: { role: 'staff' } });
     expect(demote.status).toBe(409);
     expect(demote.body.error).toBe('last_owner');
     expect((await call('PUT', `/users/${user.id}`, { token: other.token, body: { disabled: true } })).body.error).toBe('last_owner');
@@ -414,7 +423,8 @@ describe('user management', () => {
     expect(d.body.role).toBe('staff');
     expect((await call('POST', '/devices/pair-code', { token: d.body.token!, body: { role: 'staff' } })).status).toBe(403);
     expect((await call('PUT', `/users/${staff.id}`, { token: o.token, body: { role: 'owner' } })).status).toBe(200);
-    expect((await call('POST', '/devices/pair-code', { token: d.body.token!, body: { role: 'staff' } })).status).toBe(200);
+    const hdr = await stepup('kumar', 'kumar-pass');
+    expect((await call('POST', '/devices/pair-code', { token: d.body.token!, headers: hdr, body: { role: 'staff' } })).status).toBe(200);
   });
 
   it('disabling revokes every device of the user and the unused codes they minted', async () => {
@@ -422,7 +432,7 @@ describe('user management', () => {
     const u = await createUser(o.token, 'meena', 'meena-pass', { role: 'owner' });
     const a = await login('meena', 'meena-pass');
     const b = await login('meena', 'meena-pass', { client: 'web' });
-    const code = await call('POST', '/devices/pair-code', { token: a.body.token!, body: { role: 'staff' } });
+    const code = await call('POST', '/devices/pair-code', { token: a.body.token!, headers: await stepup('meena', 'meena-pass'), body: { role: 'staff' } });
     expect(code.status).toBe(200);
     const r = await call('PUT', `/users/${u.id}`, { token: o.token, body: { disabled: true } });
     expect(r.status).toBe(200);
@@ -445,7 +455,7 @@ describe('password change', () => {
     const { o } = await ownerWithUser();
     const staff = await createUser(o.token, 'kumar', 'old-pass');
     const a = await login('kumar', 'old-pass');
-    const b = await login('kumar', 'old-pass', { client: 'web' });
+    const b = await login('kumar', 'old-pass', { device_name: 'Old phone' });
     const p = await prelogin('kumar');
     const current = await fastClientKey('old-pass', p.body.salt);
     const next = await passwordSet('new-pass');
@@ -459,7 +469,7 @@ describe('password change', () => {
     const ok = await call('PUT', `/users/${staff.id}/password`, { token: a.body.token!, body: { ...next, current_client_key: current } });
     expect(ok.status).toBe(200);
     expect((await call('GET', '/me', { token: a.body.token! })).status).toBe(200);
-    expect((await webCall('GET', '/me', sessionCookie(b))).status).toBe(401);
+    expect((await call('GET', '/me', { token: b.body.token! })).status).toBe(401);
     expect((await login('kumar', 'old-pass')).status).toBe(403);
     expect((await login('kumar', 'new-pass')).status).toBe(200);
     expect((await prelogin('kumar')).body).toEqual({ salt: next.salt, iterations: next.iterations });
@@ -474,7 +484,7 @@ describe('password change', () => {
     expect((await call('PUT', `/users/${k.id}/password`, { token: sd.body.token!, body: await passwordSet('x') })).status).toBe(403);
     expect((await call('PUT', `/users/${user.id}/password`, { token: sd.body.token!, body: await passwordSet('x') })).status).toBe(403);
     const reset = await call('PUT', `/users/${k.id}/password`, { token: o.token, body: await passwordSet('fresh-pass') });
-    expect(reset.status).toBe(200);
+    expect(reset.status).toBe(200); // o is still inside its 5-minute step-up window from createUser
     expect((await call('GET', '/me', { token: kd.body.token! })).body.error).toBe('revoked');
     expect((await login('kumar', 'fresh-pass')).status).toBe(200);
   });
@@ -487,13 +497,17 @@ describe('login devices and the sync protocol', () => {
     const web = await login('ravi', password, { client: 'web' });
     const cookie = sessionCookie(web);
 
-    const c1 = customer({ code: app.body.code_block.start });
+    const c1 = customer({ code: app.body.code_block!.start });
     const e1 = entry(c1.id, 'GIVE', 5000);
     const p1 = await push(app.body.token!, { customers: [c1], entries: [e1] });
     expect(p1.status).toBe(200);
     expect(p1.body.results.map((r) => r.status)).toEqual(['stored', 'stored']);
 
-    const c2 = customer({ code: web.body.code_block.start });
+    // the web gets no block at login; it asks for one when it needs to create a customer (online)
+    expect(web.body.code_block).toBeNull();
+    const wb = await webCall('POST', '/devices/code-block', cookie, { body: {} });
+    expect(wb.status).toBe(200);
+    const c2 = customer({ code: wb.body.start });
     const p2 = await webCall('POST', '/sync/push', cookie, { body: { customers: [c2], entries: [entry(c2.id, 'RECEIVE', 100)] } });
     expect(p2.status).toBe(200);
     expect(p2.body.results.map((r: { status: string }) => r.status)).toEqual(['stored', 'stored']);
@@ -512,14 +526,18 @@ describe('login devices and the sync protocol', () => {
     expect(wp.body.changes.some((ch: { row: { id: string } }) => ch.row.id === e1.id)).toBe(true);
   });
 
-  it('previous_device_id migrates a paired phone to its login (never revoking a higher role)', async () => {
+  it('previous_device_id migrates a paired phone to its login only with that phone token (never another phone)', async () => {
     const { o } = await ownerWithUser();
     await createUser(o.token, 'kumar', 'k-pass');
     const paired = await addDevice(o.token, 'staff', 'Kumar phone');
-    const viaLogin = await login('kumar', 'k-pass', { previous_device_id: paired.device_id });
+    // a legacy row's bare id is no proof (ids are public through pulled entries)
+    const bare = await login('kumar', 'k-pass', { previous_device_id: paired.device_id });
+    expect(bare.status).toBe(200);
+    expect((await call('GET', '/me', { token: paired.token })).status).toBe(200);
+    const viaLogin = await login('kumar', 'k-pass', { previous_device_id: paired.device_id, previous_device_token: paired.token });
     expect(viaLogin.status).toBe(200);
     expect((await call('GET', '/me', { token: paired.token })).body.error).toBe('revoked');
-    // a staff login cannot revoke the owner's phone
+    // a staff login cannot revoke the owner's phone (even an owner-role login could not: it is another user's)
     const sneaky = await login('kumar', 'k-pass', { previous_device_id: o.device_id });
     expect(sneaky.status).toBe(200);
     expect((await call('GET', '/me', { token: o.token })).status).toBe(200);

@@ -1,6 +1,7 @@
 /**
  * Boot: loading gate -> openRepo() -> platform() -> sync engine -> onboarding or PIN lock -> home.
  * A database failure shows a full-screen error with "Copy details" (how the developer debugs a real phone).
+ * Web app (`__WEB_APP__`): src/ui/web/boot.ts replaces the first steps with the login gate (no onboarding, no PIN).
  */
 import './styles/app.css';
 import { openRepo } from './data/index';
@@ -20,9 +21,12 @@ import { entryScreen } from './ui/screens/entry';
 import { homeScreen } from './ui/screens/home';
 import { runOnboarding } from './ui/screens/onboarding';
 import { quickScreen } from './ui/screens/quick';
+import { stepUpDialog } from './ui/screens/login';
 import { settingsScreen } from './ui/screens/settings';
 import { statementScreen } from './ui/screens/statement';
 import { APP_VERSION } from './ui/version';
+import { webPrelude } from './ui/web/boot';
+import { isWebApp } from './ui/web/flag';
 
 function errorDetails(e: unknown, stage: string): string {
   const err = e as { name?: string; code?: string; message?: string; stack?: string } | null;
@@ -99,17 +103,26 @@ async function boot(): Promise<void> {
   const host = document.getElementById('app')!;
   showGate('boot', logo(), h('div', 'spinner'), h('p', { text: t('app.loading') }));
 
+  const web = isWebApp();
   let stage = 'platform';
   try {
     app.platform = platform();
-    stage = 'database';
-    const { repo, db } = await openRepo();
-    app.repo = repo;
-    app.db = db;
-    stage = 'settings';
-    await refreshSettings();
-    stage = 'sync';
-    app.sync = createSyncEngine(repo, app.platform);
+    if (web) {
+      // Login gate, cookie session, first sync. Resolves only once signed in (or never: a reload restarts it).
+      stage = 'web';
+      await webPrelude();
+    } else {
+      stage = 'database';
+      const { repo, db } = await openRepo();
+      app.repo = repo;
+      app.db = db;
+      stage = 'settings';
+      await refreshSettings();
+      stage = 'sync';
+      app.sync = createSyncEngine(repo, app.platform);
+    }
+    // Owner-power calls (new user, pairing code, revoke...) ask for the owner's password or a recovery code.
+    app.sync.setStepUpProvider(stepUpDialog);
   } catch (e) {
     showBootError(e, stage);
     return;
@@ -139,7 +152,9 @@ async function boot(): Promise<void> {
 
   try {
     const onboarded = await app.repo.getMeta('onboarded');
-    if (!onboarded) {
+    if (web) {
+      // The shop comes from the server at login; the web has no PIN (the session cookie is the lock).
+    } else if (!onboarded) {
       closeGate();
       await runOnboarding();
     } else if (app.settings.pin_set) {

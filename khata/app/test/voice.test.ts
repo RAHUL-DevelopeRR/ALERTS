@@ -1,18 +1,39 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import {
-  detectKind, LEXICON_SIZE, matchCustomers, needsHelp, parseAmount, parseUtterance,
+  detectKind, FOLDED_CUE_KEYS, LEXICON_SIZE, matchCustomers, needsHelp, parseAmount, parseUtterance,
   type VoiceCustomer, type VoiceIntent, type VoiceSettings,
 } from '../src/core/voice';
 import { MAX_AMOUNT_PAISE } from '../src/core/ledger';
 import cases from './fixtures/voice-utterances.json';
 import customerSets from './fixtures/voice-customers.json';
 
-type ExpectEntry = { name: string | string[] | null; amount: number | null; kind: 'GIVE' | 'RECEIVE' | null; note?: string; name_text?: string };
+type Conf = 'high' | 'medium' | 'low';
+const CONF_RANK: Record<Conf, number> = { low: 0, medium: 1, high: 2 };
+type ExpectEntry = {
+  /** customer id, a tie of ids (equal top scores), or null = no match */
+  name: string | string[] | null;
+  /** rupees */
+  amount: number | null;
+  kind: 'GIVE' | 'RECEIVE' | null;
+  note?: string;
+  name_text?: string;
+  kind_reason?: string;
+  /** exact confidence, or an upper bound */
+  confidence?: Conf;
+  confidence_max?: Conf;
+  /** the words the amount came from, as heard */
+  amount_text?: string;
+  /** rupees heard by other alternatives (order-free) */
+  amount_alternatives?: number[];
+  context_kept?: boolean;
+};
 type Case = {
   cat: string;
   alts: string[];
   customers: keyof typeof customerSets;
   settings?: Partial<VoiceSettings>;
+  /** opts.contextCustomerId: the shopkeeper is on this customer's page */
+  context?: string;
   expect: ExpectEntry | ExpectEntry[];
   known_weak?: string;
 };
@@ -50,7 +71,17 @@ function check(got: VoiceIntent[], want: ExpectEntry[]): { name: boolean; amount
     const wantPaise = w.amount === null ? null : Math.round(w.amount * 100);
     if (g.amount_paise !== wantPaise) { amount = false; problems.push(`#${i} amount: ${g.amount_paise} != ${wantPaise}`); }
     if (g.kind !== w.kind) { kind = false; problems.push(`#${i} kind: ${g.kind} (${g.kind_reason}) != ${w.kind}`); }
+    if (w.kind_reason !== undefined && g.kind_reason !== w.kind_reason) { kind = false; problems.push(`#${i} kind_reason: ${g.kind_reason} != ${w.kind_reason}`); }
     if (w.note !== undefined && g.note !== w.note) { problems.push(`#${i} note: ${g.note} != ${w.note}`); }
+    if (w.confidence !== undefined && g.confidence !== w.confidence) { problems.push(`#${i} confidence: ${g.confidence} != ${w.confidence}`); }
+    if (w.confidence_max !== undefined && CONF_RANK[g.confidence] > CONF_RANK[w.confidence_max]) { problems.push(`#${i} confidence ${g.confidence} above ${w.confidence_max}`); }
+    if (w.amount_text !== undefined && g.amount_text !== w.amount_text) { amount = false; problems.push(`#${i} amount_text: ${g.amount_text} != ${w.amount_text}`); }
+    if (w.amount_alternatives !== undefined) {
+      const got = [...(g.amount_alternatives ?? [])].sort((a, b) => a - b);
+      const want = w.amount_alternatives.map((r) => Math.round(r * 100)).sort((a, b) => a - b);
+      if (JSON.stringify(got) !== JSON.stringify(want)) { amount = false; problems.push(`#${i} amount_alternatives: ${JSON.stringify(got)} != ${JSON.stringify(want)}`); }
+    }
+    if (w.context_kept !== undefined && g.context_kept !== w.context_kept) { name = false; problems.push(`#${i} context_kept: ${g.context_kept} != ${w.context_kept}`); }
   });
   return { name, amount, kind, problems };
 }
@@ -66,7 +97,7 @@ describe('voice fixture: utterances -> intents', () => {
   for (const c of all) {
     const label = `[${c.cat}] ${c.alts.join(' || ')}`;
     it(label, () => {
-      const got = parseUtterance(c.alts, SETS[c.customers], c.settings);
+      const got = parseUtterance(c.alts, SETS[c.customers], c.settings, c.context ? { contextCustomerId: c.context } : {});
       const want = Array.isArray(c.expect) ? c.expect : [c.expect];
       const r = check(got, want);
       const s = stats.get(c.cat) ?? { n: 0, name: 0, amount: 0, kind: 0, all: 0 };
@@ -86,10 +117,26 @@ describe('voice fixture: utterances -> intents', () => {
         expect(['high', 'medium', 'low']).toContain(g.confidence);
         if (g.confidence === 'high') {
           expect(g.amount_paise).not.toBeNull();
+          expect(g.amount_text).toBeTruthy();
+          expect(g.amount_alternatives).toBeUndefined();
           expect(g.kind).not.toBeNull();
+          // never from the shop setting, a dative alone, a fuzzy verb, a mixed vote or an item guess
+          expect(g.kind_reason).not.toMatch(/bare-kuduthaachu|dative|~|^mixed|^item|^noun|^conflict|^inherited/);
           expect(g.matches.length).toBeGreaterThan(0);
+          expect(g.matches[0].score).toBeGreaterThanOrEqual(0.85);
           if (g.matches.length > 1) expect(g.matches[0].score - g.matches[1].score).toBeGreaterThanOrEqual(0.1);
         }
+        if (g.amount_paise !== null) {
+          expect(g.amount_text).toBeTruthy();
+          expect(g.heard.normalize('NFC')).toContain(g.amount_text!);
+        } else {
+          expect(g.amount_text).toBeUndefined();
+        }
+        if (g.amount_alternatives) {
+          expect(g.confidence).not.toBe('high');
+          expect(g.amount_alternatives).not.toContain(g.amount_paise);
+        }
+        if (g.kind_reason === 'bare-kuduthaachu') expect(g.confidence).not.toBe('high');
         expect(g.matches.length).toBeLessThanOrEqual(3);
         expect(g.heard.length).toBeGreaterThan(0);
       }
@@ -106,7 +153,8 @@ describe('voice fixture: utterances -> intents', () => {
     }
     lines.push(`  ${'TOTAL'.padEnd(22)} n=${String(T.n).padStart(3)}  name${pct(T.name, T.n)}  amount${pct(T.amount, T.n)}  kind${pct(T.kind, T.n)}  all${pct(T.all, T.n)}`);
     if (weakFailures.length) lines.push('  Known weak cases still failing:', ...weakFailures.map((w) => `    - ${w}`));
-    console.log(lines.join('\n'));
+    // process.stdout: vitest's default reporter hides console.log from hooks when every test passes
+    process.stdout.write(`${lines.join('\n')}\n\n`);
   });
 });
 
@@ -241,7 +289,7 @@ describe('detectKind', () => {
   const k = (s: string, st?: Partial<VoiceSettings>) => detectKind(s, st).kind;
   it('client semantics', () => {
     expect(k('Ramu 100 kuduthaachu')).toBe('RECEIVE');
-    expect(detectKind('Ramu 100 kuduthaachu').reason).toBe('verb:kuduthaachu+no-dative');
+    expect(detectKind('Ramu 100 kuduthaachu').reason).toBe('bare-kuduthaachu');
     expect(k('Ramu-kku 100 kuduthaachu')).toBe('GIVE');
     expect(detectKind('Ramu-kku 100 kuduthaachu').dativeName).toBe(true);
     expect(detectKind('Ramu 100 kuduthaachu').dativeName).toBe(false);
@@ -273,6 +321,20 @@ describe('detectKind', () => {
     expect(k('credit-la podu')).toBe('GIVE');
     expect(k('creditla')).toBe('GIVE');
     expect(k('on credit')).toBe('GIVE');
+  });
+  it('app labels are matched raw, never folded: paaru (look) is not patru (finding 21)', () => {
+    expect(k('பற்று')).toBe('GIVE');
+    expect(k('patru')).toBe('GIVE');
+    expect(k('pattru')).toBe('GIVE');
+    expect(k('வரவு')).toBe('RECEIVE');
+    expect(k('Ramu 100 paaru')).toBeNull();
+    expect(k('ராமு 100 பாரு')).toBeNull();
+    expect(k('paru')).toBeNull();
+    expect(k('parru')).toBeNull();
+    expect(k('paaru')).toBeNull();
+    expect(FOLDED_CUE_KEYS.has('paru')).toBe(false);
+    expect(FOLDED_CUE_KEYS.has('patru')).toBe(false);
+    expect(FOLDED_CUE_KEYS.has('varavu')).toBe(false);
   });
   it('Tamil labels and nouns', () => {
     expect(k('பற்று')).toBe('GIVE');
@@ -375,7 +437,7 @@ describe('parseUtterance details', () => {
     parseUtterance(Array.isArray(alts) ? alts : [alts], cs, st)[0];
   it('client sample: Ramu 100 kuduthaachu -> Ramu, ₹100, RECEIVE, never high', () => {
     const r = one('Ramu 100 kuduthaachu');
-    expect(r).toMatchObject({ name_text: 'Ramu', amount_paise: 10000, kind: 'RECEIVE', kind_reason: 'verb:kuduthaachu+no-dative' });
+    expect(r).toMatchObject({ name_text: 'Ramu', amount_paise: 10000, amount_text: '100', kind: 'RECEIVE', kind_reason: 'bare-kuduthaachu' });
     expect(r.matches[0]).toEqual({ id: 'ramu', score: 1 });
     // a dropped -kku would flip the meaning, so this is not "high"
     expect(r.confidence).toBe('medium');
@@ -429,8 +491,65 @@ describe('parseUtterance details', () => {
   it('dative disagreement between alternatives blanks the direction', () => {
     const r = one(['ராமுக்கு 100 குடுத்தாச்சு', 'ராமு 100 குடுத்தாச்சு']);
     expect(r.kind).toBeNull();
-    expect(r.kind_reason).toMatch(/^conflict:alternatives/);
+    expect(r.kind_reason).toMatch(/^conflict:dative/);
     expect(r.confidence).toBe('low');
+    // a dative alone, not heard by the other alternative
+    const d = one(['Ramukku 100', 'Ramu 100']);
+    expect(d.kind).toBeNull();
+    expect(d.kind_reason).toMatch(/^conflict:dative\(dative\|none\)/);
+    // both alternatives agree (setting GIVE): no conflict, but never high
+    const g = one(['Ramukku 100 kuduthaachu', 'Ramu 100 kuduthaachu'], { bareKuduthaachu: 'GIVE' });
+    expect(g.kind).toBe('GIVE');
+    expect(g.confidence).toBe('medium');
+    // an explicit verb in both: the dative does not matter
+    const v = one(['Ramukku 100 kattinaan', 'Ramu 100 kattinaan']);
+    expect(v.kind).toBe('RECEIVE');
+    expect(v.confidence).toBe('high');
+  });
+  it('dative alone is never high', () => {
+    const r = one('Ramukku 100');
+    expect(r).toMatchObject({ kind: 'GIVE', kind_reason: 'dative', confidence: 'medium' });
+    expect(one('I gave Ravi 200').confidence).toBe('high');
+    expect(one('gave Ravikku 200')).toMatchObject({ kind: 'GIVE', kind_reason: 'verb:gave+dative', confidence: 'medium' });
+  });
+  it('amount_text and amount_alternatives (finding 8)', () => {
+    expect(one('Ramu ஐநூறு kattinaan')).toMatchObject({ amount_paise: 50000, amount_text: 'ஐநூறு', confidence: 'high' });
+    expect(one('Sita aayirathu ainooru kattinaa').amount_text).toBe('aayirathu ainooru');
+    expect(one('Ramu 1,500 rupees kattinaan').amount_text).toBe('1,500');
+    expect(one('Kumar two fifty paid').amount_text).toBe('two fifty');
+    expect(one('Ramu 100 rupees 50 paise kattinaan')).toMatchObject({ amount_paise: 10050, amount_text: '100 rupees 50 paise' });
+    expect(one('Ramu kattinaan').amount_text).toBeUndefined();
+    const d = one(['Sita ainooru kattinaa', 'Sita aayirathu ainooru kattinaa']);
+    expect(d.amount_paise).toBe(50000);
+    expect(d.amount_alternatives).toEqual([150000]);
+    expect(d.confidence).toBe('medium');
+    const same = one(['Ramu 500 kattinaan', 'Ramu 500 kattinaan', 'Ramu 500 kattinan']);
+    expect(same.amount_alternatives).toBeUndefined();
+    expect(same.confidence).toBe('high');
+    const three = one(['Ramu 100 kattinaan', 'Ramu 1000 kattinaan', 'Ramu 10000 kattinaan']);
+    expect([...three.amount_alternatives!].sort((a, b) => a - b)).toEqual([100000, 1000000]);
+  });
+  it('customer page with a spoken name keeps the page customer unless clearly beaten (finding 9)', () => {
+    const ctx = (alts: string | string[], id: string, cs = TWO_RAMUS) => parseUtterance(Array.isArray(alts) ? alts : [alts], cs, undefined, { contextCustomerId: id })[0];
+    expect(ctx('Ramu 100 kattinaan', 'ramu')).toMatchObject({ matches: [{ id: 'ramu', score: 1 }], context_kept: true, confidence: 'high' });
+    expect(ctx('Ramu 100 kattinaan', 'ramu_b')).toMatchObject({ matches: [{ id: 'ramu_b', score: 1 }], context_kept: true, confidence: 'high' });
+    expect(ctx('ராமு 200 வாங்கினான்', 'ramu_b')).toMatchObject({ matches: [{ id: 'ramu_b', score: 1 }], kind: 'GIVE', context_kept: true });
+    // another customer named: the UI must ask
+    const s = ctx('Sita 100 kattinaan', 'ramu');
+    expect(s.matches[0].id).toBe('sita');
+    expect(s.context_kept).toBe(false);
+    const r = ctx('Ramu 100 kattinaan', 'sita');
+    expect(r.matches.map((m) => m.id).sort()).toEqual(['ramu', 'ramu_b']);
+    expect(r.context_kept).toBe(false);
+    // misspelt name still within 0.10 of the best match
+    expect(ctx('Raamu 100 kattinaan', 'ramu')).toMatchObject({ matches: [{ id: 'ramu', score: 1 }], context_kept: true });
+    expect(ctx('Kumaru 100 kuduthaan', 'kumar', DEFAULT)).toMatchObject({ matches: [{ id: 'kumar', score: 0.95 }], context_kept: true });
+    // a spoken code that is not the page customer wins
+    expect(ctx('C 42 500 kattinaan', 'ramu', DEFAULT)).toMatchObject({ matches: [{ id: 'mani', score: 1 }], context_kept: false });
+    // an unknown name on the page: nothing matched, the page customer is not assumed
+    const u = ctx('Gopal 100 kattinaan', 'ramu', DEFAULT);
+    expect(u.matches).toEqual([]);
+    expect(u.context_kept).toBe(false);
   });
   it('alt_index points at the alternative used', () => {
     const [r] = parseUtterance(['Ramu 100 good at that you', 'Ramu 100 kuduthaachu'], DEFAULT);

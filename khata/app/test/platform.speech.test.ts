@@ -5,8 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeSpeech } from '../src/platform/fake-speech';
-import { alternativesFromResults, createWebSpeech } from '../src/platform/speech-web';
-import { cleanAlternatives, clampAlternatives } from '../src/platform/speech-common';
+import { alternativesFromResults, createWebSpeech, localRecognitionAvailable } from '../src/platform/speech-web';
+import { SPEECH_PRIVACY_NOTE, cleanAlternatives, clampAlternatives } from '../src/platform/speech-common';
 
 // ---------------------------------------------------------------- mock Capgo plugin
 
@@ -71,6 +71,15 @@ function stopped(reason: string, errorCode?: string) {
 }
 
 describe('speech-common', () => {
+  it('ships the privacy notice in both languages, naming Google and the Save confirmation', () => {
+    for (const lang of ['en', 'ta'] as const) {
+      expect(SPEECH_PRIVACY_NOTE[lang]).toContain('Google');
+      expect(SPEECH_PRIVACY_NOTE[lang].length).toBeGreaterThan(80);
+    }
+    expect(SPEECH_PRIVACY_NOTE.en).toMatch(/tap Save/);
+    expect(SPEECH_PRIVACY_NOTE.ta).toContain('சேமி');
+  });
+
   it('cleans and caps alternatives', () => {
     expect(cleanAlternatives(['  ramu  100 ', 'ramu 100', '', 7, 'raamu 100', 'a', 'b', 'c'], 3)).toEqual([
       'ramu 100',
@@ -297,6 +306,36 @@ describe('createWebSpeech', () => {
     expect(await p2).toEqual([]);
   });
 
+  it('feature-detects on-device recognition (Chrome 139+) and never requires it', async () => {
+    expect(await localRecognitionAvailable('ta-IN')).toBe(false); // MockRecognition has no static available()
+    vi.stubGlobal('window', {});
+    expect(await localRecognitionAvailable('ta-IN')).toBe(false);
+    class WithAvailable extends MockRecognition {
+      static calls: unknown[] = [];
+      static async available(o: unknown) {
+        WithAvailable.calls.push(o);
+        return 'available';
+      }
+    }
+    vi.stubGlobal('window', { SpeechRecognition: WithAvailable });
+    expect(await localRecognitionAvailable('ta-IN')).toBe(true);
+    expect(WithAvailable.calls).toEqual([{ langs: ['ta-IN'], processLocally: true }]);
+    class Throwing extends MockRecognition {
+      static async available(): Promise<string> {
+        throw new TypeError('bad options');
+      }
+    }
+    vi.stubGlobal('window', { SpeechRecognition: Throwing });
+    expect(await localRecognitionAvailable('ta-IN')).toBe(false);
+    // listen() itself never sets processLocally.
+    vi.stubGlobal('window', { SpeechRecognition: WithAvailable, isSecureContext: true });
+    const s = createWebSpeech();
+    const p = s.listen({ lang: 'ta-IN' });
+    expect('processLocally' in last()).toBe(false);
+    last().end();
+    expect(await p).toEqual([]);
+  });
+
   it('ignores bias phrases when the browser has no SpeechRecognitionPhrase', async () => {
     const s = createWebSpeech();
     const p = s.listen({ lang: 'ta-IN', biasPhrases: ['ராமு'] });
@@ -393,6 +432,31 @@ describe('createNativeSpeech', () => {
     }
   });
 
+  it('resolves with what was heard when Google answers our stop() with an error (ERROR_CLIENT)', async () => {
+    const s = createNativeSpeech();
+    plugin.state.stopImpl = async () => {
+      // Real plugin sequence after stopListening() on many phones: onError(CLIENT) -> finishSession('userStop').
+      plugin.emit('error', { code: 'CLIENT', message: 'Client side error', sessionId: plugin.state.sessionId });
+      plugin.emit('listeningState', { state: 'stoppingListening', sessionId: plugin.state.sessionId, reason: 'userStop' });
+      stopped('userStop', 'CLIENT');
+    };
+    const p = s.listen({ lang: 'ta-IN' });
+    await tick();
+    await tick();
+    plugin.emit('partialResults', { matches: ['ramu 100'] });
+    await s.stop();
+    expect(await p).toEqual(['ramu 100']);
+
+    // An error that happened BEFORE stop() is still reported.
+    plugin.state.stopImpl = async () => stopped('userStop');
+    const p2 = s.listen({ lang: 'ta-IN' });
+    await tick();
+    await tick();
+    plugin.emit('error', { code: 'NETWORK', message: 'Network error', sessionId: plugin.state.sessionId });
+    await s.stop();
+    await expect(p2).rejects.toThrow('SPEECH_ERROR:NETWORK');
+  });
+
   it('stops by itself after maxMs', async () => {
     vi.useFakeTimers();
     try {
@@ -451,6 +515,21 @@ describe('createWebPlatform().speech', () => {
     script.push(['ராமு 100 குடுத்தாச்சு']);
     expect(await p.speech.listen({ lang: 'ta-IN' })).toEqual(['ராமு 100 குடுத்தாச்சு']);
     expect(p.speech).toBe(p.speech);
+  });
+
+  it('stops the session when the tab is hidden', async () => {
+    const script: string[][] = [['ramu 100 kuduthaachu']];
+    const handlers: Array<() => void> = [];
+    const doc = { visibilityState: 'visible', addEventListener: (_n: string, fn: () => void) => handlers.push(fn) };
+    vi.stubGlobal('window', { __KK_FAKE_SPEECH__: script, __KK_FAKE_SPEECH_OPTIONS__: { delayMs: 10_000 } });
+    vi.stubGlobal('document', doc);
+    const { createWebPlatform } = await import('../src/platform/web');
+    const p = createWebPlatform();
+    const result = p.speech.listen({ lang: 'ta-IN' });
+    expect(handlers.length).toBe(1);
+    doc.visibilityState = 'hidden';
+    handlers[0]();
+    expect(await result).toEqual(['ramu 100 kuduthaachu']);
   });
 
   it('uses the Web Speech API otherwise', async () => {

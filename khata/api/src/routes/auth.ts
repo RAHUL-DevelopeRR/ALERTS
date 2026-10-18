@@ -1,28 +1,46 @@
 import { Hono, type Context } from 'hono';
 import {
+  GOOGLE_EMAIL_LINK_HOURS,
   PBKDF2_DEFAULT_ITERATIONS,
+  type AuthEventsResponse,
   type ConfigResponse,
   type LoginResponse,
+  type NonceResponse,
   type OkResponse,
   type PreloginResponse,
   type Role,
   type UserSummary,
 } from '../../../shared/protocol';
 import { intVar, SERVER_VERSION, type AppEnv, type ShopRecord } from '../env';
-import { auth } from '../lib/auth';
+import { audit, auditPrune, auditStatement, listAuthEvents } from '../lib/audit';
+import { auth, ownerOnly } from '../lib/auth';
 import { blockFromResult } from '../lib/codes';
 import { pepperHash, randomToken } from '../lib/crypto';
 import { googleAudiences, verifyGoogleIdToken } from '../lib/google';
 import { badRequest, envelope, fail, isObj, readJson } from '../lib/http';
-import { checkClientKey, fakeSalt, LOCK_AFTER, LOCK_BASE_S, LOCK_MAX_S, normaliseUsername, parseClientKey } from '../lib/password';
+import {
+  knownDeviceValue,
+  lockPrune,
+  lockRead,
+  lockRecordAttempt,
+  lockReset,
+  readKnownDevice,
+  requestSource,
+  retryAfterSeconds,
+  verifyKnownDevice,
+} from '../lib/lockout';
+import { checkNonce, consumeNonce, mintNonce } from '../lib/nonce';
+import { checkClientKey, fakeSalt, normaliseUsername, parseClientKey } from '../lib/password';
 import { toShopInfo } from '../lib/rows';
 import {
   clearSessionCookie,
   newDeviceTail,
   parseLoginExtras,
+  setKnownCookie,
   setSessionCookie,
   shopOfDevice,
   WEB_SESSION_MS,
+  WEB_SHARED_SESSION_MS,
   type LoginExtrasParsed,
 } from '../lib/session';
 import { giveBackDailyAttempt, reserveDailyAttempt } from '../lib/throttle';
@@ -48,9 +66,10 @@ authRoutes.get('/config', (c) => {
 });
 
 /**
- * Step 1 of a password login. Real users get their stored salt and iterations; unknown, disabled and password-less
- * users get HMAC(PEPPER, 'salt:' + username) truncated to 16 bytes and the default count: same status, same shape,
- * same work (one indexed SELECT + one HMAC on both paths).
+ * Step 1 of a password login. Real users get their stored salt; unknown, disabled and password-less users get
+ * HMAC(PEPPER, 'salt:' + username) truncated to 16 bytes: same status, same shape, same work (one indexed SELECT +
+ * one HMAC on both paths). The iteration count is the default for everyone (the server stores no other count), so
+ * nothing in the answer depends on whether the user exists.
  */
 authRoutes.post('/auth/prelogin', async (c) => {
   if (!(await ipAllowed(c, 'prelogin'))) return fail(c, 429, 'throttled');
@@ -60,32 +79,39 @@ authRoutes.post('/auth/prelogin', async (c) => {
   if (!username) return badRequest(c, 'username');
   const [row, fake] = await Promise.all([
     c.env.DB.prepare(
-      `SELECT pw_salt, pw_iterations FROM users
+      `SELECT pw_salt FROM users
        WHERE username = ? AND disabled_at IS NULL AND pw_verifier IS NOT NULL AND pw_salt IS NOT NULL`,
     )
       .bind(username)
-      .first<{ pw_salt: string; pw_iterations: number }>(),
+      .first<{ pw_salt: string }>(),
     fakeSalt(c.env.PEPPER ?? '', username),
   ]);
-  const res: PreloginResponse = row
-    ? { salt: row.pw_salt, iterations: row.pw_iterations }
-    : { salt: fake, iterations: PBKDF2_DEFAULT_ITERATIONS };
+  const res: PreloginResponse = { salt: row ? row.pw_salt : fake, iterations: PBKDF2_DEFAULT_ITERATIONS };
   return c.json(res);
 });
 
-/** SQL: the new locked_until after a failure is recorded (failed_count = the OLD value). ?2 = now. */
-const NEXT_LOCK = `CASE WHEN failed_count + 1 >= ${LOCK_AFTER}
-  THEN strftime('%Y-%m-%dT%H:%M:%fZ', ?2,
-         '+' || MIN(${LOCK_MAX_S}, ${LOCK_BASE_S} << MIN(failed_count + 1 - ${LOCK_AFTER}, 5)) || ' seconds')
-  ELSE NULL END`;
-const LIVE_USER = 'SELECT 1 FROM users WHERE username = ?1 AND disabled_at IS NULL';
+/** A single-use nonce for Google sign-in (404 while Google sign-in is off everywhere). */
+authRoutes.post('/auth/nonce', async (c) => {
+  if (googleAudiences(c.env.GOOGLE_CLIENT_IDS).length === 0 && googleAudiences(c.env.GOOGLE_ANDROID_CLIENT_IDS).length === 0) {
+    return fail(c, 404, 'not_found');
+  }
+  if (!(await ipAllowed(c, 'nonce'))) return fail(c, 429, 'throttled');
+  return c.json<NonceResponse>({ nonce: await mintNonce(c.env.PEPPER ?? '', new Date()) });
+});
+
+interface LiveUser {
+  id: string;
+  shop_id: string;
+  role: Role;
+  pw_verifier: string | null;
+}
 
 /**
- * Step 2. Order: per-IP limiter, body validation (junk never touches a counter), the shop-wide daily failure budget
- * (auth_failures), then ONE batch that atomically records this attempt as a failure for the username unless it is
- * locked (users.failed_count/locked_until, or login_throttle for unknown/disabled usernames, so a lockout looks the
- * same for both), then the constant-time verifier check. A success resets the counters and gives the daily attempt
- * back in the batch that creates the device.
+ * Step 2. Order: per-IP limiter, body validation (junk never touches a counter), known-device check (one indexed
+ * SELECT, only when the request carries a value), the shop-wide daily failure budget (auth_failures; unknown sources
+ * only), then ONE batch that atomically records this attempt as a failure for (username, source) unless that pair is
+ * locked, then the constant-time verifier check. Real and unknown usernames take the same path. A success resets the
+ * pair and gives the daily attempt back in the batch that creates the device.
  */
 authRoutes.post('/auth/login', async (c) => {
   if (!(await ipAllowed(c, 'login'))) return fail(c, 429, 'throttled');
@@ -99,67 +125,71 @@ authRoutes.post('/auth/login', async (c) => {
   if (typeof extras === 'string') return badRequest(c, extras);
 
   const db = c.env.DB;
+  const pepper = c.env.PEPPER ?? '';
   const now = new Date();
-  const nowIso = iso(now);
-  if (!(await reserveDailyAttempt(db, 'auth_failures', now, intVar(c.env.AUTH_THROTTLE_AFTER, 100)))) {
+  const knownId = await verifyKnownDevice(db, pepper, readKnownDevice(c), username);
+  const source = knownId ? `known:${knownId}` : requestSource(c);
+  if (!knownId && !(await reserveDailyAttempt(db, 'auth_failures', now, intVar(c.env.AUTH_THROTTLE_AFTER, 100)))) {
     return fail(c, 429, 'throttled');
   }
 
-  const monthAgo = iso(addMs(now, -30 * 86_400_000));
-  const [userRes, ghostRes, lockRes] = await db.batch([
+  const [userRes, attempt, lockRes] = await db.batch([
     db
-      .prepare(
-        `UPDATE users SET failed_count = failed_count + 1, locked_until = ${NEXT_LOCK}
-         WHERE username = ?1 AND disabled_at IS NULL AND (locked_until IS NULL OR locked_until <= ?2)
-         RETURNING id, pw_verifier`,
-      )
-      .bind(username, nowIso),
-    db
-      .prepare(
-        `INSERT INTO login_throttle (username, failed_count, locked_until, updated_at)
-         SELECT ?1, 1, NULL, ?2 WHERE NOT EXISTS (${LIVE_USER})
-         ON CONFLICT(username) DO UPDATE SET failed_count = failed_count + 1, locked_until = ${NEXT_LOCK}, updated_at = ?2
-         WHERE locked_until IS NULL OR locked_until <= ?2
-         RETURNING failed_count`,
-      )
-      .bind(username, nowIso),
-    db
-      .prepare(
-        `SELECT locked_until FROM users WHERE username = ?1 AND disabled_at IS NULL
-         UNION ALL
-         SELECT locked_until FROM login_throttle WHERE username = ?1 AND NOT EXISTS (${LIVE_USER})`,
-      )
+      .prepare('SELECT id, shop_id, role, pw_verifier FROM users WHERE username = ?1 AND disabled_at IS NULL')
       .bind(username),
-    // Housekeeping: forget unknown-username counters untouched for 30 days.
-    db.prepare('DELETE FROM login_throttle WHERE updated_at < ?').bind(monthAgo),
+    lockRecordAttempt(db, username, source, now),
+    lockRead(db, username, source),
+    lockPrune(db, now),
+    auditPrune(db, now),
   ]);
-  const user = userRes?.results?.[0] as { id: string; pw_verifier: string | null } | undefined;
-  const ghost = ghostRes?.results?.[0];
+  const user = userRes?.results?.[0] as LiveUser | undefined;
+  const allowed = (attempt?.results?.length ?? 0) > 0;
   // Always do the verifier work, so every path costs the same.
-  const ok = await checkClientKey(c.env.PEPPER ?? '', clientKey, user?.pw_verifier);
-  if (!user && !ghost) {
-    const until = (lockRes?.results?.[0] as { locked_until: string | null } | undefined)?.locked_until;
-    const retry = until ? Math.max(1, Math.ceil((Date.parse(until) - now.getTime()) / 1000)) : LOCK_BASE_S;
+  const ok = await checkClientKey(pepper, clientKey, user?.pw_verifier);
+  const detail = { username, source, client: extras.client };
+  if (!allowed) {
+    const retry = retryAfterSeconds((lockRes?.results?.[0] as { locked_until: string | null } | undefined)?.locked_until, now);
     c.header('Retry-After', String(retry));
     return fail(c, 429, 'locked', { retry_after: retry });
   }
-  if (!ok || !user) return fail(c, 403, 'invalid_login');
-  const issued = await issueLogin(c, user.id, extras, now, { resetFailures: true, giveBack: true });
+  if (!ok || !user) {
+    const lockedNow = ((attempt?.results?.[0] as { locked_until: string | null } | undefined)?.locked_until ?? null) !== null;
+    await audit(db, now, {
+      shopId: user?.shop_id ?? null,
+      actorUserId: user?.id ?? null,
+      action: lockedNow ? 'login.locked' : 'login.failed',
+      targetUserId: user?.id ?? null,
+      detail,
+    });
+    return fail(c, 403, 'invalid_login');
+  }
+  if (extras.client === 'web' && user.role !== 'owner') {
+    await audit(db, now, { shopId: user.shop_id, actorUserId: user.id, action: 'login.refused', targetUserId: user.id, detail: { ...detail, why: 'web_owner_only' } });
+    return fail(c, 403, 'web_owner_only');
+  }
+  const issued = await issueLogin(c, user, extras, now, {
+    before: [lockReset(db, username, source)],
+    giveBack: !knownId,
+    action: 'login.ok',
+    detail,
+  });
   return issued ?? fail(c, 403, 'invalid_login');
 });
 
 /**
- * Google sign-in. Signs in only a user the owner pre-registered: google_sub already linked, or google_email equal and
- * google_sub still NULL (linked now, in the same batch). Never creates users.
+ * Google sign-in. The declared client kind picks the audience list (web ids are never valid for 'android'). The ID
+ * token must carry a live nonce from POST /auth/nonce (consumed here). Signs in only a user the owner pre-registered:
+ * google_sub already linked, or google_email equal, unlinked and set less than GOOGLE_EMAIL_LINK_HOURS ago (linked
+ * now, in the same batch). Never creates users.
  */
 authRoutes.post('/auth/google', async (c) => {
-  const audiences = googleAudiences(c.env.GOOGLE_CLIENT_IDS);
-  if (audiences.length === 0) return fail(c, 404, 'not_found');
-  if (!(await ipAllowed(c, 'google'))) return fail(c, 429, 'throttled');
   const body = await readJson(c);
   if (!isObj(body) || typeof body.id_token !== 'string' || body.id_token.length > 8192) return badRequest(c, 'id_token');
   const extras = parseLoginExtras(body);
   if (typeof extras === 'string') return badRequest(c, extras);
+  const audiences = googleAudiences(extras.client === 'web' ? c.env.GOOGLE_CLIENT_IDS : c.env.GOOGLE_ANDROID_CLIENT_IDS);
+  if (audiences.length === 0) return fail(c, 404, 'not_found');
+  if (!(await ipAllowed(c, 'google'))) return fail(c, 429, 'throttled');
 
   let verified: Awaited<ReturnType<typeof verifyGoogleIdToken>>;
   try {
@@ -169,22 +199,37 @@ authRoutes.post('/auth/google', async (c) => {
     return fail(c, 503, 'unavailable');
   }
   if (!verified.ok) return fail(c, 403, 'invalid_token', { message: verified.error });
-  const { sub, email } = verified.identity;
+  const { sub, email, nonce } = verified.identity;
   const now = new Date();
   const db = c.env.DB;
+  const pepper = c.env.PEPPER ?? '';
+  const nonceExp = await checkNonce(pepper, nonce, now);
+  if (!nonceExp || !(await consumeNonce(db, pepper, nonce as string, nonceExp, now))) {
+    return fail(c, 403, 'invalid_token', { message: 'nonce' });
+  }
+  const linkCutoff = iso(addMs(now, -GOOGLE_EMAIL_LINK_HOURS * 3_600_000));
   const [, found] = await db.batch([
     db
       .prepare(
         `UPDATE users SET google_sub = ?1, updated_at = ?3
          WHERE google_sub IS NULL AND google_email = ?2 AND disabled_at IS NULL
+           AND google_email_set_at IS NOT NULL AND google_email_set_at > ?4
            AND NOT EXISTS (SELECT 1 FROM users WHERE google_sub = ?1)`,
       )
-      .bind(sub, email, iso(now)),
-    db.prepare('SELECT id FROM users WHERE google_sub = ?1 AND disabled_at IS NULL').bind(sub),
+      .bind(sub, email, iso(now), linkCutoff),
+    db.prepare('SELECT id, shop_id, role, pw_verifier FROM users WHERE google_sub = ?1 AND disabled_at IS NULL').bind(sub),
   ]);
-  const userId = (found?.results?.[0] as { id: string } | undefined)?.id;
-  if (!userId) return fail(c, 403, 'not_linked');
-  const issued = await issueLogin(c, userId, extras, now, { resetFailures: false, giveBack: false });
+  const user = found?.results?.[0] as LiveUser | undefined;
+  const detail = { source: requestSource(c), client: extras.client, email_domain: email.slice(email.lastIndexOf('@') + 1) };
+  if (!user) {
+    await audit(db, now, { shopId: null, action: 'google.failed', detail: { ...detail, why: 'not_linked' } });
+    return fail(c, 403, 'not_linked');
+  }
+  if (extras.client === 'web' && user.role !== 'owner') {
+    await audit(db, now, { shopId: user.shop_id, actorUserId: user.id, action: 'login.refused', targetUserId: user.id, detail: { ...detail, why: 'web_owner_only' } });
+    return fail(c, 403, 'web_owner_only');
+  }
+  const issued = await issueLogin(c, user, extras, now, { before: [], giveBack: false, action: 'google.ok', detail });
   return issued ?? fail(c, 403, 'not_linked');
 });
 
@@ -198,22 +243,31 @@ authRoutes.post('/auth/logout', auth, async (c) => {
     db
       .prepare(`DELETE FROM pair_codes WHERE issued_by = ?1 AND kind = 'pair' AND used_at IS NULL`)
       .bind(dev.id),
+    auditStatement(db, now, { shopId: dev.shop_id, actorDeviceId: dev.id, actorUserId: dev.user_id, action: 'logout', targetDeviceId: dev.id }),
   ]);
   clearSessionCookie(c);
   return c.json<OkResponse>({ ok: true, ...envelope(c, now) });
 });
 
+/** The audit trail, newest first (owner; readable from the web). */
+authRoutes.get('/auth/events', auth, ownerOnly, async (c) => {
+  const now = new Date();
+  const events = await listAuthEvents(c.env.DB, c.get('device').shop_id);
+  return c.json<AuthEventsResponse>({ events, ...envelope(c, now) });
+});
+
 /**
- * Creates the session device for `userId` in ONE batch, exactly like /pair: the device row (role from the user,
- * user_id, client, web expiry), previous-device revoke + code move, customer-code block, then reads the user and the
- * shop. The INSERT re-checks disabled_at, so a user disabled meanwhile gets nothing (null -> caller answers 403).
+ * Creates the session device for `user` in ONE batch, exactly like /pair: the device row (role from the user,
+ * user_id, client, web expiry), previous-device takeover (login rule: same user, or a legacy row whose token the
+ * request proved), the customer-code block (not for the web), the audit row, then reads the user and the shop. The
+ * INSERT re-checks disabled_at, so a user disabled meanwhile gets nothing (null -> caller answers 403).
  */
 async function issueLogin(
   c: Context<AppEnv>,
-  userId: string,
+  user: LiveUser,
   extras: LoginExtrasParsed,
   now: Date,
-  opts: { resetFailures: boolean; giveBack: boolean },
+  opts: { before: D1PreparedStatement[]; giveBack: boolean; action: string; detail: Record<string, unknown> },
 ): Promise<Response | null> {
   const db = c.env.DB;
   const pepper = c.env.PEPPER ?? '';
@@ -222,27 +276,38 @@ async function issueLogin(
   const tokenHash = await pepperHash(token, pepper);
   const deviceId = crypto.randomUUID();
   const web = extras.client === 'web';
-  const expires = web ? iso(addMs(now, WEB_SESSION_MS)) : null;
+  const expires = web ? iso(addMs(now, extras.shared ? WEB_SHARED_SESSION_MS : WEB_SESSION_MS)) : null;
+  const prevTokenHash = extras.prev && extras.prevToken ? await pepperHash(extras.prevToken, pepper) : null;
 
-  const stmts: D1PreparedStatement[] = [];
-  if (opts.resetFailures) {
-    stmts.push(
-      db.prepare('UPDATE users SET failed_count = 0, locked_until = NULL WHERE id = ? AND disabled_at IS NULL').bind(userId),
-    );
-  }
+  const stmts: D1PreparedStatement[] = [...opts.before];
   stmts.push(
     db
       .prepare(
         `INSERT INTO devices (id, shop_id, name, role, token_hash, created_at, user_id, client, expires_at)
          SELECT ?1, shop_id, ?2, role, ?3, ?4, id, ?5, ?6 FROM users WHERE id = ?7 AND disabled_at IS NULL`,
       )
-      .bind(deviceId, extras.deviceName, tokenHash, nowIso, extras.client, expires, userId),
+      .bind(deviceId, extras.deviceName, tokenHash, nowIso, extras.client, expires, user.id),
   );
-  const tail = newDeviceTail(db, { deviceId, prev: extras.prev, maxLocal: extras.maxLocal, now });
-  const blockIdx = stmts.length + tail.blockIdx;
+  const tail = newDeviceTail(db, {
+    deviceId,
+    prev: extras.prev,
+    maxLocal: extras.maxLocal,
+    now,
+    rule: { kind: 'login', userId: user.id, prevTokenHash, web },
+    block: !web,
+  });
+  const blockIdx = tail.blockIdx < 0 ? -1 : stmts.length + tail.blockIdx;
   stmts.push(...tail.stmts);
   if (opts.giveBack) stmts.push(giveBackDailyAttempt(db, 'auth_failures', now, deviceId));
   stmts.push(
+    auditStatement(db, now, {
+      shopId: user.shop_id,
+      actorDeviceId: deviceId,
+      actorUserId: user.id,
+      action: opts.action,
+      targetDeviceId: deviceId,
+      detail: { ...opts.detail, ...(extras.prev ? { previous_device_id: extras.prev } : {}), ...(extras.shared ? { shared_computer: true } : {}) },
+    }),
     db
       .prepare(
         `SELECT u.id, u.username, u.display_name, u.role FROM devices d JOIN users u ON u.id = d.user_id WHERE d.id = ?`,
@@ -251,21 +316,26 @@ async function issueLogin(
     shopOfDevice(db, deviceId),
   );
   const out = await db.batch(stmts);
-  const user = out[out.length - 2]?.results?.[0] as UserSummary | undefined;
+  const summary = out[out.length - 2]?.results?.[0] as UserSummary | undefined;
   const shop = out[out.length - 1]?.results?.[0] as ShopRecord | undefined;
-  if (!user || !shop) return null;
-  const block = blockFromResult(out[blockIdx]);
-  if (!block) throw new Error('login: batch returned no block');
-  if (web) setSessionCookie(c, token);
+  if (!summary || !shop) return null;
+  const block = blockIdx < 0 ? null : blockFromResult(out[blockIdx]);
+  if (!web && !block) throw new Error('login: batch returned no block');
+  const known = await knownDeviceValue(pepper, deviceId);
+  if (web) {
+    setSessionCookie(c, token, extras.shared);
+    setKnownCookie(c, known);
+  }
   return c.json<LoginResponse>({
     token: web ? null : token,
     device_id: deviceId,
-    role: user.role as Role,
+    role: summary.role,
     shop: toShopInfo(shop),
     code_block: block,
     server_time: nowIso,
     sync_epoch: shop.sync_epoch,
-    user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role },
+    user: { id: summary.id, username: summary.username, display_name: summary.display_name, role: summary.role },
+    known_device: known,
+    expires_at: expires,
   });
 }
-

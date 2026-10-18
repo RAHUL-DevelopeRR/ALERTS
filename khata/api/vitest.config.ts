@@ -13,7 +13,9 @@ export default defineConfig(async () => {
           bindings: {
             PEPPER: 'test-pepper',
             SETUP_KEY: 'test-setup-key',
-            GOOGLE_CLIENT_IDS: 'web-client.apps.googleusercontent.com, android-client.apps.googleusercontent.com',
+            GOOGLE_CLIENT_IDS: 'web-client.apps.googleusercontent.com',
+            GOOGLE_ANDROID_CLIENT_IDS: 'android-client.apps.googleusercontent.com',
+            GOOGLE_HD: 'murugan-stores.in',
             TEST_MIGRATIONS: migrations,
           },
         },

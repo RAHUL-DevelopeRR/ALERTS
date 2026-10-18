@@ -18,8 +18,12 @@ export interface Bindings {
   AUTH_LIMITER?: RateLimit;
   /** Wrong password logins per UTC day before the shop-wide throttle (default 100). */
   AUTH_THROTTLE_AFTER?: string;
-  /** Comma-separated Google OAuth client ids accepted as `aud`; the FIRST is the web client id. Empty = Google off. */
+  /** Comma-separated WEB Google OAuth client ids accepted as `aud` for client 'web'; the FIRST is shown to the browser. Empty = Google off on the web. */
   GOOGLE_CLIENT_IDS?: string;
+  /** Comma-separated ANDROID (Credential Manager) client ids accepted as `aud` for client 'android'. Empty = Google off on Android (404). */
+  GOOGLE_ANDROID_CLIENT_IDS?: string;
+  /** Optional Google Workspace domain whose addresses may be pre-registered as google_email besides gmail.com. */
+  GOOGLE_HD?: string;
   /** Workers static assets (the web app in ../app/dist-web). Only /v1/* reaches the Worker. */
   ASSETS?: Fetcher;
 }
@@ -36,6 +40,7 @@ export interface DeviceRecord {
   requests_today: number;
   user_id: string | null;
   client: ClientKind | null;
+  stepup_until: string | null;
 }
 
 export interface ShopRecord {

@@ -1,0 +1,19 @@
+/* Accounts (v2): password fields, sign-in forms, user rows, the web login gate. Imported by src/ui/screens/login.ts. */
+.pw-label { display: flex; align-items: center; justify-content: space-between; }
+.pw-label .pw-toggle { padding: 0 4px; min-height: 0; font-size: 14px; }
+.login-form .btn { margin-top: 4px; }
+.login-form .inline-warn { white-space: pre-line; }
+.user-row { flex-wrap: wrap; }
+.user-row .user-actions { display: flex; gap: 8px; flex: none; margin-top: 6px; }
+.user-row .user-actions .btn { min-width: 0; padding: 6px 12px; min-height: 40px; }
+/* Web login gate: a card on the brand background, readable on a desktop and a phone browser. */
+.gate.web-login { justify-content: center; }
+.web-login-card { width: 100%; max-width: 420px; margin: 0 auto; }
+.web-login-card .card { padding: 18px 18px 8px; }
+.web-login-card .check { margin: 4px 0 10px; }
+.web-login-card .input-help { margin-top: 2px; }
+.web-login-lang { display: flex; justify-content: center; gap: 8px; margin-top: 14px; }
+.web-login-lang button { background: transparent; border: 1px solid rgba(255, 255, 255, .6); color: #fff; border-radius: 10px; padding: 6px 14px; min-height: 36px; font-size: 15px; }
+.web-login-lang button.on { background: #fff; color: var(--brand); border-color: #fff; }
+.web-google { margin: 8px 0 4px; display: flex; flex-direction: column; align-items: center; min-height: 44px; }
+.web-or { text-align: center; color: var(--muted); font-size: 14px; margin: 8px 0 4px; }

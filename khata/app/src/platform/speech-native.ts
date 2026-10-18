@@ -22,6 +22,9 @@
  * - contextualStrings is ignored on Android (no EXTRA_BIASING_STRINGS in buildRecognizerIntent), so biasPhrases are
  *   not sent. CONFIDENCE_SCORES are not exposed by the plugin.
  * - Events are not retained (notifyListeners without retain), so listeners are attached before the first start().
+ * - The plugin has no onPause hook (only handleOnDestroy tears the recogniser down), so native.ts calls stop() when
+ *   the app goes to the background: Android 12+ cuts microphone access for background apps anyway, and the session
+ *   should end with what was heard rather than with a late AUDIO/CLIENT error.
  */
 import type { PluginListenerHandle } from '@capacitor/core';
 import { SpeechRecognition } from '@capgo/capacitor-speech-recognition';
@@ -44,6 +47,12 @@ interface Session {
   id: number | null;
   matches: string[];
   errorCode: string | null;
+  /**
+   * True once we asked the plugin to stop (user tap, maxMs, app to background). Google often answers
+   * stopListening() with onError(ERROR_CLIENT) instead of onResults when little or nothing was said; after our own
+   * stop() every error is treated as "end of session" and listen() resolves with what was heard so far.
+   */
+  stopping: boolean;
   max: number;
   settled: boolean;
   onPartial?: (text: string) => void;
@@ -124,14 +133,16 @@ export function createNativeSpeech(): Speech {
     if (ev.state !== 'stopped') return;
     markIdle();
     if (!s || s.settled || s.id === null || ev.sessionId !== s.id) return;
-    const code = s.errorCode ?? (typeof ev.errorCode === 'string' ? ev.errorCode : null);
+    // s.errorCode only holds errors from before stop() (onErrorEvent ignores later ones); after our own stop the
+    // 'stopped' event's errorCode (e.g. CLIENT from stopListening) is not a failure either.
+    const code = s.errorCode ?? (!s.stopping && typeof ev.errorCode === 'string' ? ev.errorCode : null);
     if (code && !SILENCE_CODES.has(code)) settle(s, { error: speechError(code) });
     else finishFromMatches(s);
   };
 
   const onErrorEvent = (ev: SpeechRecognitionErrorEvent) => {
     const s = current;
-    if (!s || s.settled || s.id === null || ev.sessionId !== s.id) return;
+    if (!s || s.settled || s.id === null || ev.sessionId !== s.id || s.stopping) return;
     if (typeof ev.code === 'string' && ev.code) s.errorCode = ev.code;
   };
 
@@ -155,6 +166,7 @@ export function createNativeSpeech(): Speech {
       if (nativeBusy) await SpeechRecognition.stop().catch(() => undefined);
       return;
     }
+    s.stopping = true;
     s.timers.push(setTimeout(() => finishFromMatches(s), STOP_FALLBACK_MS));
     try {
       await SpeechRecognition.stop();
@@ -197,6 +209,7 @@ export function createNativeSpeech(): Speech {
         id: null,
         matches: [],
         errorCode: null,
+        stopping: false,
         max,
         settled: false,
         onPartial: opts.onPartial,
