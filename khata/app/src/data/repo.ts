@@ -130,7 +130,7 @@ function serverRowJson(r: CustomerRow): string {
 
 const KINDS: readonly EntryKind[] = ['GIVE', 'RECEIVE', 'WRITEOFF', 'REVERSAL'];
 const MODES: readonly PayMode[] = ['CASH', 'UPI', 'OTHER'];
-const KIND_LABEL: Record<EntryKind, string> = { GIVE: 'Gave', RECEIVE: 'Got', WRITEOFF: 'Write-off', REVERSAL: 'Correction' };
+const KIND_LABEL: Record<EntryKind, string> = { GIVE: 'Debit', RECEIVE: 'Credit', WRITEOFF: 'Write-off', REVERSAL: 'Correction' };
 const LEDGER_CODES = new Set(['BAD_AMOUNT', 'BAD_DATE', 'FUTURE_DATE', 'BAD_NAME', 'BAD_PHONE', 'CANNOT_REVERSE_REVERSAL']);
 
 // ------------------------------------------------------------------ row mapping

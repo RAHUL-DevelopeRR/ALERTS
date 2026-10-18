@@ -1,6 +1,6 @@
 /**
  * Tamil strings. Typed against en.ts: a missing or extra key is a compile error.
- * Words chosen for a Tamil Nadu shop counter: கொடுத்தது (gave on credit), பெற்றது (payment got),
+ * Words chosen for a Tamil Nadu shop counter: பற்று (debit: goods given on udhaar), வரவு (credit: payment received),
  * நிலுவை (balance due), முன்பணம் (advance), தினசரி கணக்கு (day book), கணக்கு விவரம் (statement).
  */
 import type { MsgKey } from './en';
@@ -38,8 +38,8 @@ export const ta: Record<MsgKey, string> = {
   'common.clear': 'அழி',
 
   // ---- kinds / modes
-  'kind.GIVE': 'கொடுத்தது',
-  'kind.RECEIVE': 'பெற்றது',
+  'kind.GIVE': 'பற்று',
+  'kind.RECEIVE': 'வரவு',
   'kind.WRITEOFF': 'தள்ளுபடி',
   'kind.REVERSAL': 'திருத்தம்',
   'kind.corrected': 'திருத்தப்பட்டது',
@@ -186,7 +186,7 @@ export const ta: Record<MsgKey, string> = {
   'cust.phonePh': 'எ.கா. 98765 43210',
   'cust.note': 'குறிப்பு',
   'cust.notePh': 'எ.கா. 3வது தெரு, நீல வீடு',
-  'cust.saveAndCredit': 'சேமி + கடன்',
+  'cust.saveAndCredit': 'சேமி + பற்று',
   'cust.phoneTaken': 'இந்த எண் {name} ({code}) அவர்களுடையது.',
   'cust.openThem': 'அவர் கணக்கைத் திற',
   'cust.sameNameTitle': 'இதே பெயர் ஏற்கனவே உள்ளது',
@@ -197,8 +197,10 @@ export const ta: Record<MsgKey, string> = {
   'cust.saved': 'சேமிக்கப்பட்டது',
 
   // ---- customer detail
-  'det.gave': 'கொடுத்தது',
-  'det.got': 'பெற்றது',
+  'det.gave': 'பற்று',
+  'det.gaveSub': 'கடன் கொடுத்தது',
+  'det.got': 'வரவு',
+  'det.gotSub': 'பணம் வந்தது',
   'det.remind': 'வாட்ஸ்அப்',
   'det.sendReceipt': 'ரசீது அனுப்பு',
   'det.statement': 'கணக்கு விவரம்',
@@ -238,8 +240,8 @@ export const ta: Record<MsgKey, string> = {
   'det.inWords': '{words}',
 
   // ---- entry keypad
-  'entry.gaveTitle': 'கடன் கொடுத்தது',
-  'entry.gotTitle': 'பணம் பெற்றது',
+  'entry.gaveTitle': 'பற்று · கடன் கொடுத்தது',
+  'entry.gotTitle': 'வரவு · பணம் வந்தது',
   'entry.correctTitle': 'பதிவைத் திருத்து',
   'entry.note': 'குறிப்பு (தேவைப்பட்டால்)',
   'entry.notePh': 'எ.கா. அரிசி, பருப்பு, எண்ணெய்',
@@ -252,8 +254,8 @@ export const ta: Record<MsgKey, string> = {
   'entry.dupConfirm': 'இதே {amount} இந்த வாடிக்கையாளருக்கு இப்போதுதான் சேமிக்கப்பட்டது. மீண்டும் சேமிக்கவா?',
   'entry.advanceConfirm': 'நிலுவை {due} தான். மீதி {adv} முன்பணமாக வைக்கப்படும். சரியா?',
   'entry.saveAgain': 'மீண்டும் சேமி',
-  'entry.addedGave': '{amount} கடன் சேர்க்கப்பட்டது · {bal}',
-  'entry.addedGot': '{amount} பெற்றது · {bal}',
+  'entry.addedGave': '{amount} பற்று வைக்கப்பட்டது · {bal}',
+  'entry.addedGot': '{amount} வரவு வைக்கப்பட்டது · {bal}',
   'entry.corrected': 'திருத்தப்பட்டது · {bal}',
   'entry.undone': 'ரத்து செய்யப்பட்டது · {bal}',
   'entry.futureDate': 'பிந்தைய தேதி அனுமதி இல்லை.',
@@ -268,8 +270,8 @@ export const ta: Record<MsgKey, string> = {
   'day.title': 'தினசரி கணக்கு',
   'day.business': 'கணக்குத் தேதிப்படி',
   'day.entered': 'பதிந்த நாள்படி',
-  'day.given': 'கொடுத்தது',
-  'day.received': 'பெற்றது',
+  'day.given': 'பற்று',
+  'day.received': 'வரவு',
   'day.split': 'ரொக்கம் {cash} · UPI {upi} · மற்றவை {other}',
   'day.writeoffs': 'தள்ளுபடி',
   'day.net': 'நிலுவை மாற்றம்',
@@ -278,7 +280,7 @@ export const ta: Record<MsgKey, string> = {
   'day.entriesOne': '1 பதிவு',
   'day.enteredOn': '{date} அன்று பதிந்தது',
   'day.none': 'இந்த நாளில் பதிவுகள் இல்லை.',
-  'day.month': '{month}: கொடுத்தது {given} · பெற்றது {received}',
+  'day.month': '{month}: பற்று {given} · வரவு {received}',
   'day.quick': 'விரைவுப் பதிவு',
   'day.prev': 'முந்தைய நாள்',
   'day.next': 'அடுத்த நாள்',
@@ -287,8 +289,8 @@ export const ta: Record<MsgKey, string> = {
   // ---- quick entry
   'quick.title': 'விரைவுப் பதிவு',
   'quick.help': 'சீட்டுகளை ஒவ்வொன்றாகப் பதியவும். வாடிக்கையாளரைத் தேர்ந்து, தொகையை உள்ளிட்டு, “சேமி, அடுத்தது” அழுத்தவும்.',
-  'quick.sitting': 'இந்த அமர்வு: {n} பதிவுகள் · கொடுத்தது {gave} · பெற்றது {got}',
-  'quick.sittingOne': 'இந்த அமர்வு: 1 பதிவு · கொடுத்தது {gave} · பெற்றது {got}',
+  'quick.sitting': 'இந்த அமர்வு: {n} பதிவுகள் · பற்று {gave} · வரவு {got}',
+  'quick.sittingOne': 'இந்த அமர்வு: 1 பதிவு · பற்று {gave} · வரவு {got}',
   'quick.finish': 'முடி',
   'quick.dateFor': 'இந்தச் சீட்டுகளின் தேதி',
 

@@ -99,8 +99,8 @@ export const customerScreen: Screen = async (root, route) => {
       h(
         'div',
         'footer-row',
-        button(t('det.gave'), () => void router.go('entry', { id: c.id, kind: 'GIVE' }), 'btn btn-gave btn-xl', { 'data-testid': 'btn-gave' }),
-        button(t('det.got'), () => void router.go('entry', { id: c.id, kind: 'RECEIVE' }), 'btn btn-got btn-xl', { 'data-testid': 'btn-got' }),
+        button([h('span', 'btn-main', t('det.gave')), h('span', 'btn-sub', t('det.gaveSub'))], () => void router.go('entry', { id: c.id, kind: 'GIVE' }), 'btn btn-gave btn-xl btn-stack', { 'data-testid': 'btn-gave' }),
+        button([h('span', 'btn-main', t('det.got')), h('span', 'btn-sub', t('det.gotSub'))], () => void router.go('entry', { id: c.id, kind: 'RECEIVE' }), 'btn btn-got btn-xl btn-stack', { 'data-testid': 'btn-got' }),
       ),
     );
   }

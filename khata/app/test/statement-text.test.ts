@@ -35,6 +35,7 @@ describe('statementText', () => {
     // The shop's own words (Gave / Got) read backwards to the customer and are never used in the text.
     expect(txt).not.toContain('கொடுத்தது');
     expect(txt).not.toContain('பெற்றது');
+    expect(txt).not.toContain('பற்று');
     // The reversal itself is folded into the "cancelled" line.
     expect(txt).not.toContain('திருத்தம் ');
     expect(txt).toContain('*14 அக். 2026 வரை நீங்கள் தர வேண்டியது ₹300*');
@@ -56,7 +57,7 @@ describe('statementText', () => {
     expect(txt).toContain('13 Oct · You paid ₹100 · UPI');
     expect(txt).toContain('*You owe ₹300 as of 14 Oct 2026*');
     expect(txt.split('\n').filter((l) => l.includes('Bought on credit')).length).toBe(3);
-    expect(txt).not.toMatch(/\b(Gave|Got)\b/);
+    expect(txt).not.toMatch(/\b(Gave|Got|Debit|Credit)\b/);
   });
 
   it('omits the UPI lines when nothing is due or no UPI id is set', async () => {

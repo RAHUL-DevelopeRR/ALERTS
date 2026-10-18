@@ -321,7 +321,7 @@ describe('entries', () => {
     expect((await repo.monthTotals('2026-10')).given_paise).toBe(50_000);
     expect(await repo.recentDuplicate(c.id, 'GIVE', 20_000)).toBe(false);
     const na = await repo.needsAttention();
-    expect(na).toEqual([{ tbl: 'entries', id: bad.entry.id, reason: 'FUTURE_DATE', summary: '₹200 Gave · Kamala (C-0001) · 12 Oct', customer_id: c.id }]);
+    expect(na).toEqual([{ tbl: 'entries', id: bad.entry.id, reason: 'FUTURE_DATE', summary: '₹200 Debit · Kamala (C-0001) · 12 Oct', customer_id: c.id }]);
     expect((await repo.exportBackup()).entries.length).toBe(1);
     // discard: stays out of balances, leaves the list, badge goes
     await repo.resolveRejected('entries', bad.entry.id, 'discard');

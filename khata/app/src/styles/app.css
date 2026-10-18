@@ -179,6 +179,8 @@ h1, h2, h3, p { margin: 0; }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--brand); }
 .btn-big { min-height: 64px; font-size: 20px; border-radius: 14px; }
 .btn-xl { min-height: 72px; font-size: 22px; font-weight: 700; border-radius: 16px; }
+.btn-stack { display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.25; padding-top: 6px; padding-bottom: 6px; }
+.btn-stack .btn-sub { font-size: 14px; font-weight: 500; opacity: 0.92; margin-top: 2px; }
 .link {
   background: none;
   border: 0;

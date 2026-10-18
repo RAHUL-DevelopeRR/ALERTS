@@ -395,7 +395,7 @@ async function main() {
     check((await text('[data-testid="entry-save"]')) === 'Save & next', 'quick entry keypad says "Save & next"');
     await tid('entry-save').click();
     await page.locator('.screen[data-route="quick"]').waitFor();
-    check((await text('[data-testid="quick-sitting"]')).includes('1 entry · gave ₹50'), 'sitting count + total');
+    check((await text('[data-testid="quick-sitting"]')).includes('1 entry · debit ₹50'), 'sitting count + total');
     check((await toast()).startsWith('Kamala:'), 'quick-entry Undo toast names the customer');
     await shot('quick-entry-after-save-en', { keepToast: true });
     await page.locator('.toast-action').click();
@@ -417,7 +417,7 @@ async function main() {
     await typeAmount('20');
     await tid('entry-save').click();
     await page.locator('.screen[data-route="quick"]').waitFor();
-    check((await text('[data-testid="quick-sitting"]')).includes('1 entry · gave ₹20'), 'back on the quick list, sitting carried on');
+    check((await text('[data-testid="quick-sitting"]')).includes('1 entry · debit ₹20'), 'back on the quick list, sitting carried on');
     await shot('quick-entry-new-customer-en', { keepToast: true });
     await page.locator('.toast-action').click();
     await page.waitForFunction(() => document.querySelector('[data-testid="quick-sitting"]')?.textContent?.includes('0 entries'));
