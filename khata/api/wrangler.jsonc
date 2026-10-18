@@ -13,12 +13,33 @@
       "migrations_dir": "migrations"
     }
   ],
-  // Per-client-IP first layer in front of POST /v1/pair (Workers Rate Limiting; per location, best effort).
+  // The web app (built by `cd ../app && npx vite build --mode web`) is served as Workers static assets: free and
+  // unlimited, no Worker invocation. Only /v1/* runs the Worker. Security headers for the HTML/JS come from the
+  // `_headers` file that scripts/prepare-assets.mjs copies into the directory (see web/_headers).
+  "assets": {
+    "directory": "../app/dist-web",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/v1/*"]
+  },
+  // Runs before `wrangler dev` and `wrangler deploy`: writes dist-web/_headers (and a placeholder index.html when
+  // the web app has not been built yet). Never builds or deletes the web app itself.
+  "build": { "command": "node scripts/prepare-assets.mjs" },
+  // Per-client-IP first layers (Workers Rate Limiting; per location, best effort).
   // namespace_id is any positive integer unique within the account.
-  "ratelimits": [{ "name": "PAIR_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+  "ratelimits": [
+    { "name": "PAIR_LIMITER", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    // /auth/prelogin, /auth/login and /auth/google (each counted under its own key).
+    { "name": "AUTH_LIMITER", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } }
+  ],
   "vars": {
     "DAILY_REQUEST_CAP": "5000",
-    "PAIR_THROTTLE_AFTER": "20"
+    "PAIR_THROTTLE_AFTER": "20",
+    // Wrong password logins per UTC day (whole shop) before the 1-per-30-s throttle.
+    "AUTH_THROTTLE_AFTER": "100",
+    // Google sign-in: comma-separated OAuth client ids (the FIRST is the web client id shown to the browser).
+    // Empty = Google sign-in off (/v1/auth/google answers 404, /v1/config returns google_client_id: null).
+    "GOOGLE_CLIENT_IDS": ""
   }
   // Secrets (never in this file):
   //   npx wrangler secret put PEPPER      (required)

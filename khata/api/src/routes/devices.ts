@@ -7,6 +7,7 @@ import {
   type OkResponse,
   type PairCodeResponse,
   type RecoveryCodesResponse,
+  type UserSummary,
 } from '../../../shared/protocol';
 import type { AppEnv } from '../env';
 import { auth, ownerOnly } from '../lib/auth';
@@ -19,11 +20,18 @@ import { optionalCode } from '../lib/util';
 
 export const deviceRoutes = new Hono<AppEnv>();
 
-deviceRoutes.get('/me', auth, (c) => {
+deviceRoutes.get('/me', auth, async (c) => {
   const now = new Date();
+  const dev = c.get('device');
+  const user = dev.user_id
+    ? await c.env.DB.prepare('SELECT id, username, display_name, role FROM users WHERE id = ?')
+        .bind(dev.user_id)
+        .first<UserSummary>()
+    : null;
   return c.json<MeResponse>({
-    device: toDeviceInfo(c.get('device')),
+    device: toDeviceInfo(dev),
     shop: toShopInfo(c.get('shop')),
+    user: user ?? null,
     ...envelope(c, now),
   });
 });

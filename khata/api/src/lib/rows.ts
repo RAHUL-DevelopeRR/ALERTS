@@ -21,6 +21,8 @@ export const toDeviceInfo = (d: DeviceInfo): DeviceInfo => ({
   created_at: d.created_at,
   last_seen_at: d.last_seen_at ?? null,
   revoked_at: d.revoked_at ?? null,
+  client: d.client ?? null,
+  user_id: d.user_id ?? null,
 });
 
 export const toCustomerRow = (r: CustomerRow): CustomerRow => ({
@@ -70,7 +72,7 @@ export const sameCustomer = (stored: CustomerRow, pushed: Record<string, unknown
 export const sameEntry = (stored: EntryRow, pushed: Record<string, unknown>) =>
   sameFields(stored as unknown as Record<string, unknown>, pushed, ENTRY_CANONICAL_FIELDS);
 
-export const DEVICE_COLUMNS = 'id, name, role, created_at, last_seen_at, revoked_at';
+export const DEVICE_COLUMNS = 'id, name, role, created_at, last_seen_at, revoked_at, client, user_id';
 
 export async function listDevices(db: D1Database, shopId: string): Promise<DeviceInfo[]> {
   const { results } = await db

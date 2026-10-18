@@ -8,6 +8,8 @@ import { exportRoutes } from './routes/export';
 import { publicRoutes } from './routes/public';
 import { shopRoutes } from './routes/shop';
 import { syncRoutes } from './routes/sync';
+import { authRoutes } from './routes/auth';
+import { usersRoutes } from './routes/users';
 
 const app = new Hono<AppEnv>();
 
@@ -27,10 +29,20 @@ app.use('/v1/*', async (c, next) => {
   await next();
 });
 
+// API answers are never cached or sniffed (cookie-authenticated web responses included).
+app.use('/v1/*', async (c, next) => {
+  await next();
+  c.res.headers.set('X-Content-Type-Options', 'nosniff');
+  c.res.headers.set('Referrer-Policy', 'no-referrer');
+  if (!c.res.headers.has('Cache-Control')) c.res.headers.set('Cache-Control', 'no-store');
+});
+
 app.use('/v1/*', bodyLimit({ maxSize: 256 * 1024, onError: (c) => c.json({ error: 'body_too_large' }, 413) }));
 
 const v1 = new Hono<AppEnv>();
 v1.route('/', publicRoutes);
+v1.route('/', authRoutes);
+v1.route('/', usersRoutes);
 v1.route('/', deviceRoutes);
 v1.route('/', shopRoutes);
 v1.route('/', syncRoutes);
