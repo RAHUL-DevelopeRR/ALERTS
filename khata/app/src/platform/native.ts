@@ -27,7 +27,8 @@ import { Keyboard } from '@capacitor/keyboard';
 import { Network } from '@capacitor/network';
 import { Share } from '@capacitor/share';
 import { SecureStorage, StorageError, StorageErrorType } from '@aparajita/capacitor-secure-storage';
-import type { Platform } from './types';
+import { createNativeSpeech } from './speech-native';
+import type { Platform, Speech } from './types';
 
 const PRIVATE_DIR = 'private';
 const SHARE_DIR = 'share';
@@ -147,6 +148,9 @@ export function createNativePlatform(): Platform {
 
   const privatePath = (name: string) => `${PRIVATE_DIR}/${name}`;
 
+  // Created on first use so the plugin's listeners are only attached when voice is actually used.
+  let speech: Speech | null = null;
+
   async function readText(path: string): Promise<string | null> {
     try {
       const r = await Filesystem.readFile({ path, directory: Directory.Data, encoding: Encoding.UTF8 });
@@ -159,6 +163,11 @@ export function createNativePlatform(): Platform {
 
   return {
     isNative: true,
+
+    get speech(): Speech {
+      if (!speech) speech = createNativeSpeech();
+      return speech;
+    },
 
     async openExternal(uri) {
       try {

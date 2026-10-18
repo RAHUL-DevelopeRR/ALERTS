@@ -41,4 +41,62 @@ export interface Platform {
   hideKeyboard(): Promise<void>;
   /** Exit the app (Android); no-op on web. */
   exitApp(): Promise<void>;
+  /** Speech-to-text for voice entry (Android: Google SpeechRecognizer via plugin; web: Web Speech API). */
+  readonly speech: Speech;
+}
+
+/** One recognition update. Kept for UI code that wants to model partial vs final results explicitly. */
+export interface SpeechResult {
+  alternatives: string[];
+  final: boolean;
+}
+
+export type SpeechLang = 'ta-IN' | 'en-IN';
+
+export interface SpeechListenOptions {
+  lang: SpeechLang;
+  /** Live (interim) transcript, best alternative only. Called zero or more times before listen() settles. */
+  onPartial?: (text: string) => void;
+  /** Alternatives to request (1-5, default 5). How many come back is up to the recogniser (often one for ta-IN). */
+  maxAlternatives?: number;
+  /**
+   * Phrases to bias recognition towards (customer names). Honoured only where the platform supports it:
+   * Android ignores them (the plugin does not pass EXTRA_BIASING_STRINGS); web passes them as
+   * SpeechRecognition.phrases only when the browser exposes SpeechRecognitionPhrase, and silently retries without
+   * them if the browser rejects them.
+   */
+  biasPhrases?: string[];
+  /** Safety cap: listening is stopped after this many ms (default 15000). The UI's own limit should be shorter. */
+  maxMs?: number;
+}
+
+/**
+ * Speech-to-text. Both real implementations need internet and send the audio to Google (Android's speech service,
+ * Chrome's Web Speech backend); the privacy notice must say so.
+ *
+ * Errors (listen() rejects with an Error whose message is exactly one of):
+ * - 'SPEECH_UNAVAILABLE' : no recogniser on this device/browser (non-GMS ROM, Firefox, ...).
+ * - 'SPEECH_PERMISSION'  : microphone permission is not granted (call ensurePermission() first).
+ * - 'SPEECH_ERROR:<code>': recogniser failure. Android codes (plugin getErrorCode): NETWORK, NETWORK_TIMEOUT,
+ *   SERVER, SERVER_DISCONNECTED, AUDIO, CLIENT, INSUFFICIENT_PERMISSIONS, RECOGNIZER_BUSY, START_FAILED,
+ *   BUSY (a previous session did not shut down in time; try again),
+ *   UNKNOWN_<n> (e.g. UNKNOWN_12 = language not supported, UNKNOWN_13 = language unavailable).
+ *   Web codes (SpeechRecognitionErrorEvent.error): network, audio-capture, language-not-supported,
+ *   bad-grammar, phrases-not-supported, aborted, ...
+ * Silence (Android NO_MATCH / SPEECH_TIMEOUT, web 'no-speech') is not an error: listen() resolves with whatever
+ * partial text was heard (usually []).
+ */
+export interface Speech {
+  /** True when a recogniser exists (Android: SpeechRecognizer.isRecognitionAvailable; web: the API is present). */
+  available(): Promise<boolean>;
+  /** Ask for microphone permission if needed; false if denied. */
+  ensurePermission(): Promise<boolean>;
+  /**
+   * Start listening. onPartial gets live text; resolves with up to `maxAlternatives` final alternatives (best first,
+   * trimmed, non-empty, de-duplicated) or [] on silence. stop() ends listening early and still resolves with what
+   * was heard. Only one session at a time: a second listen() while one is running stops the first.
+   */
+  listen(opts: SpeechListenOptions): Promise<string[]>;
+  /** Stop the current session (if any); the pending listen() resolves with the result so far. */
+  stop(): Promise<void>;
 }

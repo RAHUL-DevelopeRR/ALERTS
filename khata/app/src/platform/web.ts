@@ -1,10 +1,18 @@
 /**
- * Browser preview implementation of Platform (`npm run dev`).
+ * Browser implementation of Platform: the dev preview (`npm run dev`) AND the production web app.
  *
- * Nothing here is secure or durable: secrets and "private files" live in localStorage under a `preview-` prefix so a
- * developer can see them in DevTools. The Android build never includes this module (see index.ts / __NATIVE_BUILD__).
+ * - Secrets and "private files" live in localStorage under the historical `preview-` prefixes (kept so existing
+ *   previews and e2e runs keep their data). The production web app authenticates with an HttpOnly cookie, so it
+ *   stores no token here; nothing in this module is meant to be secret.
+ * - shareFile() downloads the file; shareText() uses the Web Share sheet where the browser has one, else copies.
+ * - openExternal() opens http(s) links in a new tab with noopener/noreferrer and hands tel:/sms:/upi:/whatsapp:
+ *   links to the OS through a link click; other schemes (javascript:, data:, ...) are refused.
+ * - speech: Web Speech API (speech-web.ts), or the scripted fake when `window.__KK_FAKE_SPEECH__` is set (e2e).
+ * The Android build never includes this module (see index.ts / __NATIVE_BUILD__).
  */
-import type { Platform } from './types';
+import { createFakeSpeech } from './fake-speech';
+import { createWebSpeech } from './speech-web';
+import type { Platform, Speech } from './types';
 
 const SECRET_PREFIX = 'preview-secret:';
 const FILE_PREFIX = 'preview-file:';
@@ -31,6 +39,51 @@ function checkName(name: string): void {
 
 function isAbort(e: unknown): boolean {
   return !!e && typeof e === 'object' && (e as { name?: string }).name === 'AbortError';
+}
+
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'tel:', 'sms:', 'smsto:', 'mailto:', 'upi:', 'whatsapp:']);
+
+function openViaLink(href: string, newTab: boolean): void {
+  const a = document.createElement('a');
+  a.href = href;
+  if (newTab) a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/** Short human name for this browser, used as the default device name when pairing ("Chrome on Android"). */
+function browserName(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const browser = /Edg\//.test(ua)
+    ? 'Edge'
+    : /SamsungBrowser\//.test(ua)
+      ? 'Samsung Internet'
+      : /OPR\//.test(ua)
+        ? 'Opera'
+        : /Firefox\//.test(ua)
+          ? 'Firefox'
+          : /Chrome\//.test(ua)
+            ? 'Chrome'
+            : /Safari\//.test(ua)
+              ? 'Safari'
+              : 'Browser';
+  const os = /Android/.test(ua)
+    ? 'Android'
+    : /iPhone|iPad|iPod/.test(ua)
+      ? 'iPhone'
+      : /Windows/.test(ua)
+        ? 'Windows'
+        : /Mac OS X|Macintosh/.test(ua)
+          ? 'Mac'
+          : /CrOS/.test(ua)
+            ? 'Chromebook'
+            : /Linux/.test(ua)
+              ? 'Linux'
+              : '';
+  return os ? `${browser} on ${os}` : browser;
 }
 
 function download(fileName: string, blob: Blob): void {
@@ -72,17 +125,44 @@ async function copyText(text: string): Promise<void> {
 }
 
 export function createWebPlatform(): Platform {
+  let speech: Speech | null = null;
   return {
     isNative: false,
 
+    /** Chosen on first use, so an e2e script may set window.__KK_FAKE_SPEECH__ any time before the first mic tap. */
+    get speech(): Speech {
+      if (!speech) {
+        const script = typeof window !== 'undefined' ? window.__KK_FAKE_SPEECH__ : undefined;
+        if (Array.isArray(script)) {
+          window.__KK_FAKE_SPEECH_OPTIONS__ ??= {};
+          speech = createFakeSpeech(script, window.__KK_FAKE_SPEECH_OPTIONS__);
+        } else {
+          speech = createWebSpeech();
+        }
+      }
+      return speech;
+    },
+
     async openExternal(uri) {
+      let url: URL;
       try {
-        const w = window.open(uri, '_blank');
-        if (!w) return false;
-        try {
-          w.opener = null;
-        } catch {
-          /* cross-origin window: ignore */
+        url = new URL(uri, window.location.href);
+      } catch {
+        return false;
+      }
+      if (!EXTERNAL_SCHEMES.has(url.protocol)) return false;
+      try {
+        if (url.protocol === 'http:' || url.protocol === 'https:') {
+          // With 'noopener' window.open() returns null even on success, so a blocked popup cannot be detected;
+          // fall back to a link click (also new-tab, also noopener) when window.open is unavailable or throws.
+          try {
+            window.open(url.href, '_blank', 'noopener,noreferrer');
+          } catch {
+            openViaLink(url.href, true);
+          }
+        } else {
+          // tel:, sms:, upi:, whatsapp: go to the OS handler; no empty tab is left behind.
+          openViaLink(url.href, false);
         }
         return true;
       } catch {
@@ -104,21 +184,9 @@ export function createWebPlatform(): Platform {
       console.info('[platform/web] shareText fallback: copied to clipboard\n' + text);
     },
 
-    async shareFile(fileName, content, mimeType, title) {
-      const blob = new Blob([content], { type: mimeType });
-      if (typeof navigator.share === 'function' && typeof File === 'function') {
-        const file = new File([blob], fileName, { type: mimeType });
-        const data: ShareData = title ? { files: [file], title } : { files: [file] };
-        if (typeof navigator.canShare !== 'function' || navigator.canShare(data)) {
-          try {
-            await navigator.share(data);
-            return true;
-          } catch (e) {
-            if (isAbort(e)) return false;
-          }
-        }
-      }
-      download(fileName, blob);
+    async shareFile(fileName, content, mimeType) {
+      // A download is the one behaviour every desktop and mobile browser supports for backups/CSV exports.
+      download(fileName, new Blob([content], { type: mimeType }));
       return true;
     },
 
@@ -199,7 +267,7 @@ export function createWebPlatform(): Platform {
     },
 
     async deviceModel() {
-      return 'Browser preview';
+      return browserName();
     },
 
     async hideKeyboard() {

@@ -301,7 +301,7 @@ async function main() {
     await tid('st-lang-en').click();
     const enText = await text('[data-testid="st-preview"]');
     check(enText.includes('You owe ₹150 as of'), 'English statement closing line');
-    check(enText.includes('Bought on credit ₹250') && enText.includes('You paid ₹100 · Cash'), 'English statement lines');
+    check(enText.includes('Purchase ₹250') && enText.includes('You paid ₹100 · Cash'), 'English statement lines');
     await shot('statement-text-en');
 
     console.log('Settings: language -> English, backup');

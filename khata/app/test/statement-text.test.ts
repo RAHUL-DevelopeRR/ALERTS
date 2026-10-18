@@ -52,11 +52,11 @@ describe('statementText', () => {
     expect(txt).toContain('Statement: *Kamala* (C-0001)');
     expect(txt).toContain('12 Oct 2026 to 14 Oct 2026');
     expect(txt).toContain('Opening balance: ₹0');
-    expect(txt).toContain('12 Oct · Bought on credit ₹150');
-    expect(txt).toContain('12 Oct · Cancelled ~Bought on credit ₹1,500~');
+    expect(txt).toContain('12 Oct · Purchase ₹150');
+    expect(txt).toContain('12 Oct · Cancelled ~Purchase ₹1,500~');
     expect(txt).toContain('13 Oct · You paid ₹100 · UPI');
     expect(txt).toContain('*You owe ₹300 as of 14 Oct 2026*');
-    expect(txt.split('\n').filter((l) => l.includes('Bought on credit')).length).toBe(3);
+    expect(txt.split('\n').filter((l) => l.includes('Purchase')).length).toBe(3);
     expect(txt).not.toMatch(/\b(Gave|Got|Debit|Credit)\b/);
   });
 

@@ -57,6 +57,10 @@ curl -s -X POST localhost:8787/v1/pair -H 'Content-Type: application/json' \
      -d '{"code":"<8 digits from setup>","device_name":"Owner phone"}'
 ```
 
+`wrangler dev` also serves the web app at <http://localhost:8787/> from `../app/dist-web` (a placeholder page until
+`cd ../app && npx vite build --mode web` has run; the wrangler build step writes `_headers` and the placeholder).
+Browsers accept the `Secure` session cookie on `http://localhost`.
+
 ## Deploying to the shop's own Cloudflare account
 
 Use the shop's Cloudflare account (created with the shop's email; the developer is a member).

@@ -62,6 +62,19 @@ describe('config and prelogin', () => {
     expect([...fake1.headers.keys()].sort()).toEqual([...real.headers.keys()].sort());
   });
 
+  it('is rate limited per client IP (AUTH_LIMITER, 20 per minute per route)', async () => {
+    const ip = `203.0.113.${Math.floor(Math.random() * 250) + 1}`;
+    const statuses: number[] = [];
+    for (let i = 0; i < 22; i++) {
+      statuses.push((await call('POST', '/auth/prelogin', { body: { username: 'nobody' }, headers: { 'CF-Connecting-IP': ip } })).status);
+    }
+    expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
+    expect(statuses.at(-1)).toBe(429);
+    // other routes and other clients have their own budget
+    expect((await call('POST', '/auth/login', { ...loginBody('nobody', 'x'), headers: { 'CF-Connecting-IP': ip } })).status).toBe(400);
+    expect((await call('POST', '/auth/prelogin', { body: { username: 'nobody' }, headers: { 'CF-Connecting-IP': '198.51.100.7' } })).status).toBe(200);
+  });
+
   it('rejects malformed usernames with 400 (format is public, says nothing about existence)', async () => {
     for (const u of ['ab', 'a'.repeat(33), 'has space', 'ராமு', 42, null]) {
       const r = await call('POST', '/auth/prelogin', { body: { username: u } });

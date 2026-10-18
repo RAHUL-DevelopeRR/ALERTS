@@ -39,7 +39,8 @@ Debug builds install as **`live.zerox.kadankanakku.debug`**, labelled "Kadan Kan
 | Old WebView page | `capacitor.config.ts` (`server.errorPath`), `public/webview-old.html` | Below System WebView 80 Capacitor shows this Tamil/English "update Android System WebView" page instead of a blank screen. |
 | Tamil + English only | `app/build.gradle` (`androidResources.localeFilters`) | Drops the ~90 other locales AndroidX would bundle. |
 | No `captureInput` | `capacitor.config.ts` | It would replace the WebView's input connection with a dummy one, which breaks Tamil keyboards (no `input` events, no composing) and the dial pad for `type=tel`. |
-| Permissions are INTERNET, ACCESS_NETWORK_STATE and VIBRATE only | `AndroidManifest.xml` | Storage, media, camera, biometric, contacts and location permissions are stripped with `tools:node="remove"` even when a plugin merges them in. The merged manifest also has `live.zerox.kadankanakku.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. AndroidX defines it as a signature-level permission for the app's own broadcast receivers (the Share plugin uses it). Users never see it. |
+| Permissions are INTERNET, ACCESS_NETWORK_STATE, VIBRATE and RECORD_AUDIO only | `AndroidManifest.xml` | RECORD_AUDIO is for voice entry (v2); it is a runtime permission asked on the first mic tap, and the audio goes to Google's speech service (never stored by the app). Storage, media, camera, MODIFY_AUDIO_SETTINGS, biometric, contacts and location permissions are stripped with `tools:node="remove"` even when a plugin merges them in. The merged manifest also has `live.zerox.kadankanakku.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`. AndroidX defines it as a signature-level permission for the app's own broadcast receivers (the Share plugin uses it). Users never see it. |
+| Speech service visibility | `AndroidManifest.xml` (`<queries>` for `android.speech.RecognitionService`) | Android 11+ package visibility: without it `SpeechRecognizer.isRecognitionAvailable()` cannot see Google's recogniser and voice reports "unavailable". |
 | HTTPS only in release | `res/xml/network_security_config.xml` | Release builds trust only system CAs and refuse cleartext. |
 | Cleartext allowed in debug | `src/debug/res/xml/network_security_config.xml` | This lets you test against `wrangler dev --ip 0.0.0.0` at `http://<LAN-IP>:8787`. Only debug builds get it. |
 | Portrait, `adjustResize` | `MainActivity` in the manifest | The keypad screens are designed for portrait. The WebView shrinks above the soft keyboard. |
@@ -57,10 +58,22 @@ BT=$ANDROID_HOME/build-tools/36.0.0
 $BT/zipalign -c -P 16 -v 4 app/build/outputs/apk/release/app-release.apk   # "Verification successful"
 unzip -o -q app/build/outputs/apk/release/app-release.apk 'lib/*' -d /tmp/kk-lib
 readelf -lW /tmp/kk-lib/lib/arm64-v8a/*.so | grep LOAD                     # every LOAD alignment is 0x4000 (16 KB)
-$BT/aapt2 dump permissions app/build/outputs/apk/release/app-release.apk  # INTERNET, ACCESS_NETWORK_STATE, VIBRATE (+ the signature-only receiver permission)
+$BT/aapt2 dump permissions app/build/outputs/apk/release/app-release.apk  # INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO (+ the signature-only receiver permission)
 ```
 
 The only native library is `libsqlcipher.so`, which comes from `@capacitor-community/sqlite`. It ships 16 KB-aligned (`0x4000`) for every ABI, so the APK meets the Android 15+ 16 KB page-size requirement.
+
+### Speech-to-text (voice entry, v2)
+
+`platform().speech` (`src/platform/types.ts` → `Speech`) hides the recogniser:
+
+| Where | Engine | Notes |
+|---|---|---|
+| Android | Google `SpeechRecognizer` via `@capgo/capacitor-speech-recognition` **8.3.2** (pinned exactly: newest release at least two weeks old at install time; review the Capgo diff before bumping) | `src/platform/speech-native.ts`. Inline recognition (`popup:false`), `partialResults:true`, up to 5 alternatives requested (how many Google returns for `ta-IN` is unverified, often one). Customer-name biasing is not possible: the plugin ignores `contextualStrings` on Android. Needs Google's speech service (missing on non-GMS ROMs → `available()` false) and internet unless an offline pack is installed. |
+| Browser / web app | Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`) | `src/platform/speech-web.ts`. Chrome is the tested target (audio goes to Google); Firefox has no API (`available()` false). Bias phrases are sent only where `SpeechRecognitionPhrase` exists. |
+| Tests / e2e | `createFakeSpeech(script)` | `src/platform/fake-speech.ts`. In the web build, `window.__KK_FAKE_SPEECH__ = [["ராமு 100 குடுத்தாச்சு", ...], ...]` (set before the first mic tap, e.g. with Playwright `addInitScript`) replaces the recogniser; `[]` = silence, `["!SPEECH_ERROR:NETWORK"]` = failure; `window.__KK_FAKE_SPEECH_OPTIONS__ = {delayMs, available, permission}`. |
+
+`listen()` rejects with `SPEECH_UNAVAILABLE`, `SPEECH_PERMISSION` or `SPEECH_ERROR:<code>`; silence resolves `[]`. The privacy notice must say that voice audio is sent to Google (Android, Chrome).
 
 ## Signing a release
 

@@ -317,7 +317,7 @@ export const en = {
   'stx.opening': 'Opening balance',
   'stx.openingAdvance': 'Opening advance: {amount}',
   'stx.cancelled': 'Cancelled',
-  'stx.kind.GIVE': 'Bought on credit',
+  'stx.kind.GIVE': 'Purchase',
   'stx.kind.RECEIVE': 'You paid',
   'stx.kind.WRITEOFF': 'Waived',
   'stx.closingDue': 'You owe {amount} as of {date}',

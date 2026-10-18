@@ -10,6 +10,7 @@
  * Fault injection: `server.fault({ path, mode })` for network failures, lost responses after commit, or a
  * canned HTTP error. `server.requests` logs every request.
  */
+import { createFakeSpeech } from '../../src/platform/fake-speech';
 import {
   CODE_BLOCK_SIZE,
   CUSTOMER_CANONICAL_FIELDS,
@@ -504,6 +505,8 @@ export class FakeServer {
 
 export class FakePlatform {
   readonly isNative = false;
+  /** Scripted speech (no microphone); push entries onto speech.script to drive voice code. */
+  readonly speech = createFakeSpeech([], { delayMs: 0 });
   secrets = new Map<string, string>();
   files = new Map<string, string>();
   online = true;
