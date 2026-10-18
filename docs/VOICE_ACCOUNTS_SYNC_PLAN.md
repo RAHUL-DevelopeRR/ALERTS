@@ -6,6 +6,8 @@ This builds on the v1 plan in [`docs/GROCERY_DEBT_APP_PLAN.md`](GROCERY_DEBT_APP
 
 Each fact carries a tag. **[verified]** means checked on an official page or in the code. **[likely]** means a strong secondary source or a local measurement. **(unverified)** means not confirmed; anything this plan relies on that is unverified also appears as a risk in section 9. Prices are converted at about ₹88 to $1.
 
+**Labels used in this plan.** Since v1.0.1 (commit `eb60ddd`) the app's two buttons read **Debit / பற்று** (= `GIVE`, goods given on credit, the customer owes more, red) and **Credit / வரவு** (= `RECEIVE`, payment received, the customer owes less, green) (`i18n/en.ts`, `ta.ts`, keys `det.gave` / `det.got`) **[verified]**. This plan uses those labels. Note that shop slang often uses English "credit" to mean *udhaar* (goods on credit, i.e. Debit in the app), so the parser treats bare "credit"/"debit" as ambiguous (section 2.2).
+
 ---
 
 ## Answers to your questions
@@ -13,36 +15,35 @@ Each fact carries a tag. **[verified]** means checked on an official page or in 
 **1. Can we add voice mode, and which free speech and AI backend handles Tamil?**
 
 Yes. The free primary engine is Google's own speech recogniser set to Tamil (`ta-IN`).
-- **Android:** it is built into the phone, and the app reaches it through the plugin `@capgo/capacitor-speech-recognition` 8.x, which is the only maintained speech plugin for Capacitor 8 **[verified]**.
-- **Web app:** Chrome's Web Speech API, which works in Chrome and Edge only **[verified]**.
-- Both cost ₹0 and need no API key. Both need internet and send the audio to Google.
+- **Android:** it is built into the phone, and the app reaches it through the plugin `@capgo/capacitor-speech-recognition` 8.x, the best-maintained Capacitor 8 native speech plugin **[verified: npm, peer `@capacitor/core >=8`]**.
+- **Web app:** the browser's Web Speech API. **Chrome (desktop and Android) is the tested target** and sends audio to Google. Edge (Microsoft's cloud recogniser) and Safari 14.1+ / iOS 14.5+ (Apple, prefixed `webkitSpeechRecognition`) also expose the API, but their Tamil quality is unverified; MDN lists the API as "limited availability" **[verified]**. The app feature-detects and shows the mic only in browsers that pass a `ta-IN` smoke test.
+- Both cost ₹0 and need no API key. Both need internet by default, and the audio goes to the browser's or phone's speech provider (Google on Android and Chrome; Microsoft on Edge; Apple on Safari).
 
-Speech-to-text alone is not enough. A transcript like "ராமு 100 குடுத்தாச்சு" still has to become *customer + amount + Gave/Got*. That part is done by a Tamil/Tanglish parser that we write ourselves. It runs on the phone, costs nothing, and checks every guess against the shop's real customer list. A prototype got 25 of 26 test sentences right **[verified, prototype]**.
+Speech-to-text alone is not enough. A transcript like "ராமு 100 குடுத்தாச்சு" still has to become *customer + amount + Debit/Credit*. That part is done by a Tamil/Tanglish parser that we write ourselves. It runs on the phone, costs nothing, and checks every guess against the shop's real customer list. A scratch prototype got 25 of 26 sentences right on kind and amount **[likely: 26 developer-written sentences, an earlier rule set, customer resolution not scored, no real recogniser output]**. It is committed with its fixtures under `khata/app/test/` in week 1 and re-scored under this plan's rules, including customer resolution.
 
 **Fallbacks**, added only if measurements show they are needed:
-- **Sarvam `saaras:v4`** called through our Worker. It costs about ₹0.49 per minute, roughly ₹50–300 a month at this shop's volume **[likely]**, and it topped the only independent Tamil benchmark we found **[likely]**.
+- **Sarvam `saaras:v4`** called through our Worker. It costs ₹30 per hour billed per second (₹0.50/min) **[verified]**, roughly ₹50–300 a month at this shop's volume **[likely]**. Sarvam's models ("Sarvam Audio" 14.2% and Saarika 2.5 14.9% Tamil WER) led the only independent Indian benchmark we found **[likely]**, but `saaras:v4` itself has no independent Tamil score.
 - **A free AI model on Cloudflare** (Workers AI, Gemma 4) for sentences the parser cannot decide.
 
 **Honest accuracy statement:** nobody publishes Tamil accuracy for Google's phone recogniser. My estimate is that 75–90% of short commands will come out fully right (customer, amount and direction) in a quiet shop (unverified). Voice therefore **never saves money on its own**. Every entry stops on a confirmation screen with a Save button, and voice is switched on by default only after it passes a test with the shopkeeper's own voice (section 8).
 
 **2. What happens when the shopkeeper says "Ramu 100 kuduthaachu"?**
 
-1. She holds the mic button and speaks, and the words appear live on screen.
-2. The recogniser returns up to 5 guesses, and the parser reads them:
+1. **Once, at setup**, the app asks what this sentence means in *this* shop: "நீங்கள் 'ராமு 100 குடுத்தாச்சு' என்றால், ராமு உங்களுக்குப் பணம் கொடுத்தாரா? / Does it mean Ramu paid you?" She answers **yes**. (Until she answers, the app treats the verb as unknown: Debit and Credit both stay unselected.)
+2. She holds the mic button and speaks, and the words appear live on screen.
+3. The recogniser returns one or more guesses (how many Google returns for Tamil is unverified; often only one), and the parser reads them:
    - "100" is the amount: ₹100.
-   - "குடுத்தாச்சு" is a "give" verb. Ramu is the subject and there is no "-க்கு" ("to") on his name, so it means *Ramu has paid the shop*. That is **Got / பெற்றது (RECEIVE)**, which lowers his due.
+   - "குடுத்தாச்சு" is an impersonal "has been given". With the setup answer and no "-க்கு" ("to") on the name, it means *Ramu has paid the shop*: **Credit / வரவு (RECEIVE)**, which lowers his due.
    - "ராமு" matches the customer Ramu in her list.
-3. The app opens Ramu's Gave/Got screen already filled in: green **Got ₹100**, the amount in Tamil words, what it heard, and "பாக்கி ₹450 → ₹350".
-4. She taps **Save**. The app lands on **Ramu's account page** with the new balance and an Undo button.
+4. The app opens Ramu's Debit/Credit screen with **₹100** filled in, the amount in words, what it heard, and "பாக்கி ₹450 → ₹350".
+5. **Direction, by default:** "Ramu 100 kuduthaachu" (paid) and "Ramu**க்கு** 100 kuduthaachu" (*gave to* Ramu) differ by one syllable that the recogniser easily swallows after a vowel-final name. So for this verb family the app shows Credit as **suggested** (outlined, pulsing) but does **not select it**; she taps **Credit** once. If the week-4 field test on her phones shows the recogniser keeps "-க்கு" reliably, the owner can switch on Settings → Voice → "Preselect Credit for kuduthaachu". Credit is then preselected, and the only guards against a swallowed "-க்கு" are the due before → after line and Undo (section 2.2, rule 2).
+6. She taps **Save**. The app lands on **Ramu's account page** with the new balance and an Undo button.
 
-Because Tamil phrasing can point either way, the app asks whenever it cannot be sure:
-- "Ramu**க்கு** 100 குடுத்தாச்சு" means *gave to* Ramu: credit, GIVE.
-- "vaanginaan" means *Ramu took goods*: GIVE.
-- "kanakkula ezhuthu" means *write it in his account*: GIVE.
-- If there are two Ramus, it shows a picker.
-- If the direction is unclear, Gave and Got are both left unselected and Save stays disabled.
-
-The app also asks once, at setup, what "Ramu 100 kuduthaachu" means in *this* shop, so the meaning is not a guess hard-coded by the developer.
+Clearer verbs preselect directly: "Ramu 100 kattinaan" or "Ramu gpay 100" → Credit. Because Tamil phrasing can point either way, the app asks (nothing preselected, Save disabled until she taps a side) whenever it cannot be sure:
+- "Ramu**க்கு** 100 குடுத்தாச்சு" or "Ramu kitta 100 kuduthaachu" means *gave to* Ramu: Debit (GIVE), but it is never preselected.
+- "vaanginaan" means *Ramu took goods*: Debit. "kanakkula ezhuthu" means *write it in his account*: Debit, but weak, so it is not preselected.
+- The recogniser's guesses disagree on the direction or on the amount: nothing is preselected, and the amounts show as chips.
+- If there are two Ramus, it shows a picker with code and phone digits.
 
 **3. Login with user id/password and/or Google, on the server?**
 
