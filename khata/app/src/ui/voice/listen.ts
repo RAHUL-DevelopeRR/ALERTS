@@ -1,9 +1,16 @@
 /**
- * The voice entry flow: mic tap -> listening sheet (live transcript, Cancel / Done) -> parseUtterance() ->
+ * The voice entry flow: mic press -> listening sheet (live transcript, Cancel / Stop) -> parseUtterance() ->
  * one step per spoken entry: the customer's keypad prefilled (entry.ts shows the "Heard" banner), a picker when
  * several customers fit, "Add new customer?" when nobody does, a balance answer for "Ramu baaki evvalavu".
  * Several entries in one sentence run as a queue ("1 of 2"): the next one opens after Save (or after backing out).
  * Nothing is ever written here: only the entry screen's Save button saves, after the shopkeeper looked at it.
+ *
+ * Hold-to-talk (Settings → Voice, default on): the mic buttons (mic-button.ts, press.ts) call startVoice() on
+ * pointerdown with `held: true` and releaseVoice() when the finger leaves after HOLD_MIN_MS: the session is stopped
+ * at once (the adapter resolves with what was heard so far) and the sheet shows "Finishing…". While the mic is
+ * held the sheet offers no Stop button (the release is the end; Cancel stays) and the recogniser is told so
+ * (listen({ held }), so a pause mid-sentence does not end the session). A shorter press is a tap (voiceTapped()):
+ * Stop comes back and listening goes on until Stop, the adapter's settle time or the cap.
  */
 import { formatCode } from '../../core/ledger';
 import { parseUtterance, type CustomerMatch, type VoiceIntent } from '../../core/voice';
@@ -11,7 +18,7 @@ import type { HomeRow } from '../../data/types';
 import { getLang, t, type MsgKey } from '../../i18n';
 import { SPEECH_PRIVACY_NOTE } from '../../platform/index';
 import { app } from '../app';
-import { button, h } from '../components/dom';
+import { button, clear as clearChildren, h } from '../components/dom';
 import { alertDialog, dialog, pushLayer, toast } from '../components/overlay';
 import { money, toneClass } from '../format';
 import * as router from '../router';
@@ -19,7 +26,8 @@ import { signedBal } from '../screens/customer';
 import { micIcon } from './icons';
 import { planIntent, speechErrorKey, toVoiceCustomers } from './plan';
 import { prefillFromIntent, type VoicePrefill } from './prefill';
-import { bumpVoiceStats, loadVoicePrefs, saveVoicePrefs } from './prefs';
+import { bindPress } from './press';
+import { bumpVoiceStats, loadVoicePrefs, saveVoicePrefs, voicePrefs } from './prefs';
 
 export interface VoiceStartOptions {
   /** On a customer's page: a missing or matching name means this customer (finding 9). */
@@ -30,13 +38,25 @@ export interface VoiceStartOptions {
 
 /** The UI's own cap on one listening session; the platform's safety cap (15 s) is longer. */
 const LISTEN_MS = 12_000;
+/** Background taps on the listening sheet are ignored this long after it opens (see openListening). */
+const SCRIM_GRACE_MS = 600;
 
 let running = false;
+/** The live recogniser session (from listen() until it settles), so a release can end it. */
+let live: { ctl: ListenCtl; stop: () => void; released: boolean } | null = null;
+/** True while the shopkeeper holds a mic (hold-to-talk): the sheet hints "Release to finish". */
+let held = false;
 
-/** Mic tap. Resolves when the flow has handed over to a screen or was cancelled; never throws. */
-export async function startVoice(opts: VoiceStartOptions = {}): Promise<void> {
+export interface VoicePressOptions {
+  /** The mic is being held (hold-to-talk): releaseVoice() or voiceTapped() follows. */
+  held?: boolean;
+}
+
+/** Mic press. Resolves when the flow has handed over to a screen or was cancelled; never throws. */
+export async function startVoice(opts: VoiceStartOptions = {}, press: VoicePressOptions = {}): Promise<void> {
   if (running) return;
   running = true;
+  held = !!press.held;
   try {
     await run(opts);
   } catch (e) {
@@ -44,7 +64,35 @@ export async function startVoice(opts: VoiceStartOptions = {}): Promise<void> {
     toast(t('voice.error', { code: String((e as Error)?.message ?? e) }), { error: true });
   } finally {
     running = false;
+    held = false;
   }
+}
+
+/**
+ * Hold-to-talk: the finger left the mic after holding. Ends the live session now (listen() resolves with what was
+ * heard so far) and shows "Finishing…"; nothing to do when no session is live yet (still in the preflight) or
+ * the session already ended.
+ */
+export function releaseVoice(): void {
+  held = false;
+  const s = live;
+  if (!s || s.released) return;
+  s.released = true;
+  s.ctl.finishing();
+  s.stop();
+}
+
+/** A short press: it was a tap, not a hold. The sheet shows the tap hints (Stop ends the session). */
+export function voiceTapped(): void {
+  held = false;
+  if (!live) return;
+  live.ctl.setHeld(false);
+  app.platform.speech.setHeld?.(false);
+}
+
+/** Tests only. */
+export function _voiceLive(): boolean {
+  return live !== null;
 }
 
 /**
@@ -103,19 +151,24 @@ async function run(opts: VoiceStartOptions): Promise<void> {
     onStop: () => void speech.stop(),
   });
 
-  for (;;) {
+  for (let attempt = 0; ; attempt++) {
     let alts: string[];
-    ctl.listening();
-    void app.platform.hapticTap();
+    ctl.listening(held);
+    // The first start was already felt at the press (mic-button.ts); a retry has no press of its own.
+    if (attempt > 0) void app.platform.hapticTap();
+    const session = { ctl, stop: () => void speech.stop(), released: false };
+    live = session;
     try {
-      alts = await speech.listen({ lang: prefs.lang, onPartial: (text) => ctl.setLive(text), maxAlternatives: 5, biasPhrases: names, maxMs: LISTEN_MS });
+      alts = await speech.listen({ lang: prefs.lang, onPartial: (text) => ctl.setLive(text), maxAlternatives: 5, biasPhrases: names, maxMs: LISTEN_MS, held });
     } catch (e) {
+      if (live === session) live = null;
       if (cancelled) return;
       const key = speechErrorKey(String((e as Error)?.message ?? e));
       const retry = key !== 'unavailable' && key !== 'denied';
       if (!(await ctl.fail(t(`voice.${key}` as MsgKey), retry))) return;
       continue;
     }
+    if (live === session) live = null;
     if (cancelled) return;
     if (!alts.length) {
       if (!(await ctl.fail(t('voice.nothing'), true))) return;
@@ -138,7 +191,12 @@ async function run(opts: VoiceStartOptions): Promise<void> {
 
 interface ListenCtl {
   setLive(text: string): void;
-  listening(): void;
+  /** Back to "Listening…"; `held` = the mic is being held: the hint reads "Release to finish" and there is no Stop. */
+  listening(held: boolean): void;
+  /** The mic was released (hold-to-talk): "Finishing…", no Stop button, until the result arrives. */
+  finishing(): void;
+  /** The hold hint and the missing Stop button while listening (a short press turned out to be a tap). */
+  setHeld(held: boolean): void;
   thinking(text: string): void;
   /** Show a failure under the mic. Resolves true when the shopkeeper taps "Try again", false on Cancel. */
   fail(message: string, retry: boolean): Promise<boolean>;
@@ -147,50 +205,109 @@ interface ListenCtl {
 
 function openListening(o: { onCancel: () => void; onStop: () => void }): ListenCtl {
   let retryResolve: ((again: boolean) => void) | null = null;
+  let phase: 'listening' | 'finishing' | 'thinking' | 'failed' = 'listening';
   const state = h('div', { class: 'voice-state', attrs: { 'data-testid': 'voice-state' } });
-  const mic = h('button', { class: 'voice-mic', attrs: { type: 'button', 'aria-label': t('voice.stop'), 'data-testid': 'voice-mic' }, on: { click: () => (retryResolve ? retryResolve(true) : o.onStop()) } }, micIcon());
-  const live = h('div', { class: 'voice-live placeholder', attrs: { 'data-testid': 'voice-live' } });
-  const hint = h('div', 'voice-hint', t('voice.hintSay'), ' ', h('b', { text: t('voice.hintExample') }), h('br'), t('voice.hintSub'));
+  const mic = h('button', { class: 'voice-mic', attrs: { type: 'button', 'aria-label': t('voice.stop'), 'data-testid': 'voice-mic' } }, micIcon());
+  const liveEl = h('div', { class: 'voice-live placeholder', attrs: { 'data-testid': 'voice-live' } });
+  const hint = h('div', { class: 'voice-hint', attrs: { 'data-testid': 'voice-hint' } });
+  /** `tip`: a tap session in hold mode also says that holding the mic is an option (nothing else on screen does). */
+  const setHint = (isHeld: boolean, tip = false): void => {
+    clearChildren(hint);
+    hint.classList.remove('hidden');
+    hint.classList.toggle('hold', isHeld);
+    if (isHeld) hint.append(t('voice.hintRelease'));
+    else hint.append(t('voice.hintSay'), ' ', h('b', { text: t('voice.hintExample') }), h('br'), t('voice.hintSub'));
+    if (!isHeld && tip) hint.append(h('br'), h('span', { class: 'voice-hint-tip', attrs: { 'data-testid': 'voice-hint-hold' }, text: t('voice.hintHold') }));
+  };
+  setHint(false);
   const msg = h('div', { class: 'voice-msg hidden', attrs: { 'data-testid': 'voice-msg' } });
+  // The big mic: while listening a tap is Stop and a hold ends on release (hold mode); after a failure a press is
+  // "Try again" (hold it to speak and release to finish, or tap and speak until Stop).
+  let pressWasRetry = false;
+  bindPress(mic, {
+    holdMode: () => voicePrefs().hold,
+    onDown: () => {
+      pressWasRetry = retryResolve !== null;
+      if (pressWasRetry) {
+        held = voicePrefs().hold;
+        void app.platform.hapticTap();
+        retryResolve?.(true);
+      }
+    },
+    onUp: (kind) => {
+      if (kind === 'hold') {
+        if (live) releaseVoice();
+        else held = false;
+        return;
+      }
+      if (pressWasRetry) voiceTapped();
+      else if (phase === 'listening') o.onStop();
+    },
+  });
   const cancelBtn = button(t('common.cancel'), () => (retryResolve ? retryResolve(false) : o.onCancel()), 'btn', { 'data-testid': 'voice-cancel' });
   const doneBtn = button(t('voice.stop'), () => (retryResolve ? retryResolve(true) : o.onStop()), 'btn btn-primary', { 'data-testid': 'voice-done' });
   const panel = h(
     'div',
     { class: 'voice-panel', attrs: { role: 'dialog', 'aria-modal': 'true', 'data-testid': 'voice-sheet' } },
-    state, mic, live, hint, msg, h('div', 'voice-actions', cancelBtn, doneBtn),
+    state, mic, liveEl, hint, msg, h('div', 'voice-actions', cancelBtn, doneBtn),
   );
-  const scrim = h('div', { class: 'scrim scrim-sheet voice-scrim', on: { click: (e) => { if (e.target === scrim) cancelBtn.click(); } } }, panel);
+  // Defence in depth for hold-to-talk on touch screens: the click a phone synthesizes when the finger lifts lands
+  // where the sheet now is; a background tap only cancels once the sheet has been open for SCRIM_GRACE_MS.
+  const openedAt = Date.now();
+  const scrim = h('div', { class: 'scrim scrim-sheet voice-scrim', on: { click: (e) => { if (e.target === scrim && Date.now() - openedAt >= SCRIM_GRACE_MS) cancelBtn.click(); } } }, panel);
   let closed = false;
   const remove = pushLayer(scrim, () => cancelBtn.click());
   const setLive = (text: string): void => {
-    live.textContent = text || t('voice.listening');
-    live.classList.toggle('placeholder', !text);
+    liveEl.textContent = text || t('voice.listening');
+    liveEl.classList.toggle('placeholder', !text);
   };
   return {
     setLive,
-    listening() {
+    listening(isHeld) {
       retryResolve = null;
+      phase = 'listening';
       state.textContent = t('voice.listening');
       mic.className = 'voice-mic listening';
       setLive('');
+      setHint(isHeld, !isHeld && voicePrefs().hold);
       msg.classList.add('hidden');
       doneBtn.textContent = t('voice.stop');
       doneBtn.disabled = false;
-      doneBtn.classList.remove('hidden');
+      // Held: releasing is the one way to finish; a Stop button beside it would be a second instruction.
+      doneBtn.classList.toggle('hidden', isHeld);
+    },
+    finishing() {
+      if (phase !== 'listening') return;
+      phase = 'finishing';
+      state.textContent = t('voice.finishing');
+      mic.className = 'voice-mic finishing';
+      // Nothing more can be said: no "Say: ..." example under a session that is ending.
+      hint.classList.add('hidden');
+      doneBtn.classList.add('hidden');
+    },
+    setHeld(isHeld) {
+      if (phase !== 'listening') return;
+      setHint(isHeld, !isHeld && voicePrefs().hold);
+      doneBtn.classList.toggle('hidden', isHeld);
     },
     thinking(text) {
       retryResolve = null;
+      phase = 'thinking';
       state.textContent = t('voice.thinking');
       mic.className = 'voice-mic thinking';
       setLive(text);
+      setHint(false);
       doneBtn.disabled = true;
+      doneBtn.classList.remove('hidden');
     },
     fail(message, retry) {
+      phase = 'failed';
       state.textContent = t('voice.failed');
       mic.className = 'voice-mic failed';
       // The live line must not keep saying "Listening…" under a red mic: the message below carries what was heard.
-      live.textContent = '—';
-      live.classList.add('placeholder');
+      liveEl.textContent = '—';
+      liveEl.classList.add('placeholder');
+      setHint(false);
       msg.textContent = message;
       msg.classList.remove('hidden');
       doneBtn.textContent = t('voice.tryAgain');

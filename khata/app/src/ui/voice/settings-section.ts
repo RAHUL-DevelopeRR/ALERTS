@@ -1,5 +1,6 @@
 /**
- * Settings → Voice entry: on/off, spoken language, what a bare "Ramu 100 kuduthaachu" means in this shop, a
+ * Settings → Voice entry: on/off, spoken language, hold-to-talk or tap-to-talk, what a bare "Ramu 100 kuduthaachu"
+ * means in this shop, a
  * "Try voice" tester (shows how a sentence is understood, saves nothing), the local accuracy counters and the
  * privacy line (audio goes to Google). settings.ts inserts the result with one call.
  */
@@ -64,6 +65,25 @@ function bareChoice(p: VoicePrefs): HTMLElement[] {
   return [
     choice('RECEIVE', t('voice.bareReceive'), t('voice.bareReceiveSub')),
     choice('GIVE', t('voice.bareGive'), t('voice.bareGiveSub')),
+  ];
+}
+
+function holdChoice(p: VoicePrefs): HTMLElement[] {
+  const pick = (hold: boolean): void => {
+    if (hold === p.hold) return;
+    void saveVoicePrefs({ hold }).then(() => router.rerender(), (e) => toast(errorText(e), { error: true }));
+  };
+  const choice = (hold: boolean, label: string, sub: string): HTMLElement =>
+    h(
+      'button',
+      { class: `voice-choice${p.hold === hold ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': p.hold === hold ? 'true' : 'false', 'data-testid': hold ? 'voice-hold-on' : 'voice-hold-off' }, on: { click: () => pick(hold) } },
+      h('span', { text: label }),
+      h('span', { class: 'sub', text: sub }),
+    );
+  return [
+    choice(true, t('voice.holdOn'), t('voice.holdOnSub')),
+    choice(false, t('voice.holdOff'), t('voice.holdOffSub')),
+    h('p', { class: 'input-help', style: { marginTop: '8px' }, text: t('voice.holdHint') }),
   ];
 }
 
@@ -183,6 +203,7 @@ export async function voiceSettingsSection(): Promise<HTMLElement> {
       p.on
         ? [
             block(h('span', { class: 'field-label', text: t('voice.lang') }), langSeg(p)),
+            block(h('span', { class: 'field-label', text: t('voice.holdQ') }), holdChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.bareQ') }), bareChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.try') }), tryBlock(p)),
             block(statsBlock(st)),

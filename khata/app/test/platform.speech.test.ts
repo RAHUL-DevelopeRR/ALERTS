@@ -56,7 +56,7 @@ const plugin = vi.hoisted(() => {
 
 vi.mock('@capgo/capacitor-speech-recognition', () => ({ SpeechRecognition: plugin.SpeechRecognition }));
 
-const { createNativeSpeech, mapStartError, PARTIAL_SETTLE_MS } = await import('../src/platform/speech-native');
+const { createNativeSpeech, mapStartError, biasList, BIAS_PHRASE_MAX_LEN, MAX_BIAS_PHRASES, PARTIAL_SETTLE_MS } = await import('../src/platform/speech-native');
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -127,6 +127,26 @@ describe('createFakeSpeech', () => {
     await s.stop();
     expect(await p).toEqual(['ramu 100 kuduthaachu']);
     expect(s.stopCount).toBe(1);
+  });
+
+  it('stop() with stopDelayMs delivers the result after that delay and ends the partials (hold-to-talk release)', async () => {
+    const opts = { delayMs: 10_000, stopDelayMs: 40 };
+    const s = createFakeSpeech([['ramu 100 kuduthaachu', 'ramu nooru kuduthaachu']], opts);
+    const partials: string[] = [];
+    const p = s.listen({ lang: 'ta-IN', onPartial: (t) => partials.push(t) });
+    let settled = false;
+    void p.then(() => (settled = true));
+    await s.stop();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(settled).toBe(false);
+    expect(await p).toEqual(['ramu 100 kuduthaachu', 'ramu nooru kuduthaachu']);
+    expect(partials[partials.length - 1]).toBe('ramu 100 kuduthaachu');
+    // a second stop() during the delay changes nothing; stopDelayMs 0 (default) resolves at once
+    opts.stopDelayMs = 0;
+    const q = s.listen({ lang: 'ta-IN' });
+    await s.stop();
+    expect(await q).toEqual([]);
+    expect(s.stopCount).toBe(2);
   });
 
   it('reports unavailable and denied permission', async () => {
@@ -364,7 +384,7 @@ describe('createNativeSpeech', () => {
     const p = s.listen({ lang: 'ta-IN', onPartial: (t) => partials.push(t), biasPhrases: ['ராமு'] });
     await tick();
     await tick();
-    expect(plugin.state.startCalls[0]).toEqual({ language: 'ta-IN', maxResults: 5, partialResults: true, popup: false });
+    expect(plugin.state.startCalls[0]).toEqual({ language: 'ta-IN', maxResults: 5, partialResults: true, popup: false, contextualStrings: ['ராமு'] });
     plugin.emit('partialResults', { matches: ['ராமு'] });
     plugin.emit('partialResults', { matches: ['ராமு 100'] });
     // Final onResults payload, then the session ends.
@@ -372,6 +392,40 @@ describe('createNativeSpeech', () => {
     stopped('results');
     expect(await p).toEqual(['ராமு 100 குடுத்தாச்சு', 'ராமு நூறு குடுத்தாச்சு']);
     expect(partials).toEqual(['ராமு', 'ராமு 100', 'ராமு 100 குடுத்தாச்சு']);
+  });
+
+  it('passes the customer names as contextualStrings (EXTRA_BIASING_STRINGS), deduped and capped; omits an empty list', async () => {
+    const s = createNativeSpeech();
+    let p = s.listen({ lang: 'ta-IN', biasPhrases: [' Ramu ', 'Kamala', 'Ramu', '', '  ', 'Kamala', 'ராமு  அண்ணன்'] });
+    await tick();
+    await tick();
+    expect(plugin.state.startCalls[0].contextualStrings).toEqual(['Ramu', 'Kamala', 'ராமு அண்ணன்']);
+    stopped('silence', 'NO_MATCH');
+    expect(await p).toEqual([]);
+
+    p = s.listen({ lang: 'ta-IN', biasPhrases: [] });
+    await tick();
+    await tick();
+    expect('contextualStrings' in plugin.state.startCalls[1]).toBe(false);
+    stopped('silence', 'NO_MATCH');
+    expect(await p).toEqual([]);
+
+    p = s.listen({ lang: 'ta-IN' });
+    await tick();
+    await tick();
+    expect(plugin.state.startCalls[2]).toEqual({ language: 'ta-IN', maxResults: 5, partialResults: true, popup: false });
+    stopped('silence', 'NO_MATCH');
+    expect(await p).toEqual([]);
+
+    const many = Array.from({ length: 260 }, (_, i) => `Name ${i}`);
+    many.push('x'.repeat(150));
+    expect(biasList(many)).toHaveLength(MAX_BIAS_PHRASES);
+    expect(biasList(['x'.repeat(150)])[0]).toHaveLength(BIAS_PHRASE_MAX_LEN);
+    // the cap counts code points: a name of 100 emoji keeps all 100, and one of 101 is never cut inside a pair
+    expect(Array.from(biasList(['😀'.repeat(101)])[0])).toHaveLength(BIAS_PHRASE_MAX_LEN);
+    expect(biasList(['😀'.repeat(BIAS_PHRASE_MAX_LEN)])[0]).toBe('😀'.repeat(BIAS_PHRASE_MAX_LEN));
+    expect(biasList([1, null, 'a'] as unknown[])).toEqual(['a']);
+    expect(biasList(undefined)).toEqual([]);
   });
 
   it('resolves [] on silence and rejects SPEECH_ERROR:<code> on errors', async () => {
@@ -497,6 +551,87 @@ describe('createNativeSpeech', () => {
       expect(partials).toEqual(['ராமு', 'ராமு 100', 'ராமு 100', 'ராமு 100 குடுத்தாச்சு']);
       await vi.advanceTimersByTimeAsync(20_000);
       expect(plugin.state.stopCalls).toBe(1); // nothing left armed after the session settled
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hold-to-talk: a held session is never ended by the settle timer; setHeld(false) (a short press) arms it; maxMs still caps', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = createNativeSpeech();
+      plugin.state.stopImpl = async () => {
+        plugin.emit('partialResults', { matches: ['ராமு 100'] });
+        stopped('userStop');
+      };
+      let p = s.listen({ lang: 'ta-IN', held: true, maxMs: 12_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      plugin.emit('partialResults', { matches: ['ராமு'] });
+      await vi.advanceTimersByTimeAsync(PARTIAL_SETTLE_MS * 2);
+      expect(plugin.state.stopCalls).toBe(0); // the shopkeeper is thinking of the amount, finger still on the mic
+      plugin.emit('partialResults', { matches: ['ராமு 100'] });
+      await vi.advanceTimersByTimeAsync(PARTIAL_SETTLE_MS * 2);
+      expect(plugin.state.stopCalls).toBe(0);
+      await s.stop(); // release
+      expect(plugin.state.stopCalls).toBe(1);
+      expect(await p).toEqual(['ராமு 100']);
+
+      // a short press is a tap after all: from then on the transcript settling ends the session
+      p = s.listen({ lang: 'ta-IN', held: true, maxMs: 12_000 });
+      await vi.advanceTimersByTimeAsync(0);
+      plugin.emit('partialResults', { matches: ['sita' ] });
+      await vi.advanceTimersByTimeAsync(1000);
+      s.setHeld!(false);
+      await vi.advanceTimersByTimeAsync(PARTIAL_SETTLE_MS - 10);
+      expect(plugin.state.stopCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(plugin.state.stopCalls).toBe(2);
+      expect(await p).toEqual(['ராமு 100']);
+      s.setHeld!(false); // no live session: nothing happens
+
+      // maxMs caps a held session too
+      p = s.listen({ lang: 'ta-IN', held: true, maxMs: 3000 });
+      await vi.advanceTimersByTimeAsync(0);
+      plugin.emit('partialResults', { matches: ['kamala' ] });
+      await vi.advanceTimersByTimeAsync(2990);
+      expect(plugin.state.stopCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(plugin.state.stopCalls).toBe(3);
+      expect(await p).toEqual(['ராமு 100']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a stop() while listen() is still waiting for the previous native session resolves that listen() with [] without starting (hold released early)', async () => {
+    vi.useFakeTimers();
+    try {
+      const s = createNativeSpeech();
+      plugin.state.stopImpl = async () => undefined; // the plugin is slow to report 'stopped'
+      const p1 = s.listen({ lang: 'ta-IN' });
+      await vi.advanceTimersByTimeAsync(0);
+      await s.stop();
+      await vi.advanceTimersByTimeAsync(1500); // STOP_FALLBACK_MS: p1 resolves, native still busy
+      expect(await p1).toEqual([]);
+      const started = plugin.state.startCalls.length;
+
+      const p2 = s.listen({ lang: 'ta-IN', held: true });
+      await vi.advanceTimersByTimeAsync(10); // waiting for idle
+      await s.stop(); // the finger left during the wait
+      stopped('userStop'); // the previous native session ends: the wait is over
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await p2).toEqual([]);
+      expect(plugin.state.startCalls.length).toBe(started); // never started a session nobody was speaking into
+
+      // the adapter is usable again, and a stop() before a listen() does not poison that listen()
+      plugin.state.stopImpl = async () => stopped('userStop');
+      await s.stop();
+      const p3 = s.listen({ lang: 'ta-IN' });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(plugin.state.startCalls.length).toBe(started + 1);
+      plugin.emit('partialResults', { matches: ['ravi 20'] });
+      await s.stop();
+      expect(await p3).toEqual(['ravi 20']);
     } finally {
       vi.useRealTimers();
     }

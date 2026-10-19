@@ -1,0 +1,160 @@
+diff --git a/node_modules/@capgo/capacitor-speech-recognition/android/src/main/java/app/capgo/speechrecognition/SpeechRecognitionPlugin.java b/node_modules/@capgo/capacitor-speech-recognition/android/src/main/java/app/capgo/speechrecognition/SpeechRecognitionPlugin.java
+index 0c992a2..81681f2 100644
+--- a/node_modules/@capgo/capacitor-speech-recognition/android/src/main/java/app/capgo/speechrecognition/SpeechRecognitionPlugin.java
++++ b/node_modules/@capgo/capacitor-speech-recognition/android/src/main/java/app/capgo/speechrecognition/SpeechRecognitionPlugin.java
+@@ -47,6 +47,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+     private static final int FORCE_STOP_TIMEOUT_MS = 1500;
+     private static final int STOP_FALLBACK_TIMEOUT_MS = 500;
+     private static final int CONTINUOUS_RESTART_DELAY_MS = 100;
++    private static final int MAX_CONTEXTUAL_STRINGS = 500;
++    private static final int MAX_CONTEXTUAL_STRING_LENGTH = 100;
+     /** Target audioLevel emit rate (~15 Hz), matching the public docs. */
+     private static final long AUDIO_LEVEL_EMIT_INTERVAL_MS = 67;
+ 
+@@ -84,6 +86,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+     private boolean lastPartialResults = false;
+     private int lastAllowForSilence = 0;
+     private boolean lastUseOnDeviceRecognition = false;
++    /** Biasing strings of the current session (EXTRA_BIASING_STRINGS, Android 13+); reused on continuous restarts. */
++    private ArrayList<String> lastContextualStrings = null;
+ 
+     private PluginCall activeStartCall;
+     private ListeningState state = ListeningState.IDLE;
+@@ -129,7 +133,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+             return;
+         }
+ 
+-        Intent intent = buildRecognizerIntent(language, MAX_RESULTS, null, false, 0, true);
++        Intent intent = buildRecognizerIntent(language, MAX_RESULTS, null, false, 0, true, null);
+         supportChecker.checkRecognitionSupport(
+             intent,
+             mainExecutor(),
+@@ -175,6 +179,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+         int allowForSilence = call.getInt("allowForSilence", 0);
+         boolean continuousPTT = call.getBoolean("continuousPTT", false);
+         boolean muteRecognizerBeepOption = call.getBoolean("muteRecognizerBeep", continuousPTT);
++        ArrayList<String> contextualStrings = readContextualStrings(call.getArray("contextualStrings", null));
+ 
+         if (useOnDeviceRecognition && popup) {
+             call.reject("On-device recognition is not supported with popup mode on Android.");
+@@ -218,6 +223,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+             lastPartialResults = partialResults;
+             lastAllowForSilence = allowForSilence;
+             lastUseOnDeviceRecognition = useOnDeviceRecognition;
++            lastContextualStrings = contextualStrings;
+             activeStartCall = null;
+             sessionId++;
+             currentSessionId = sessionId;
+@@ -253,6 +259,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+             call,
+             allowForSilence,
+             useOnDeviceRecognition,
++            contextualStrings,
+             currentSessionId,
+             false
+         );
+@@ -529,10 +536,19 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+         PluginCall call,
+         int allowForSilence,
+         boolean useOnDeviceRecognition,
++        ArrayList<String> contextualStrings,
+         long currentSessionId,
+         boolean restarting
+     ) {
+-        Intent intent = buildRecognizerIntent(language, maxResults, prompt, partialResults, allowForSilence, useOnDeviceRecognition);
++        Intent intent = buildRecognizerIntent(
++            language,
++            maxResults,
++            prompt,
++            partialResults,
++            allowForSilence,
++            useOnDeviceRecognition,
++            contextualStrings
++        );
+ 
+         if (showPopup) {
+             try {
+@@ -589,7 +605,8 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+         String prompt,
+         boolean partialResults,
+         int allowForSilence,
+-        boolean useOnDeviceRecognition
++        boolean useOnDeviceRecognition,
++        ArrayList<String> contextualStrings
+     ) {
+         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+@@ -613,6 +630,12 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+             intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
+         }
+ 
++        // Contextual biasing (customer names etc.): EXTRA_BIASING_STRINGS exists from Android 13 (API 33).
++        // Older versions get no extra; whether a given recognition service honours it is up to the service.
++        if (contextualStrings != null && !contextualStrings.isEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
++            intent.putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, new ArrayList<>(contextualStrings));
++        }
++
+         // EXTRA_DICTATE_BEEP is undocumented and ignored on some devices; AudioManager fallback handles those.
+         if (muteRecognizerBeep) {
+             intent.putExtra(EXTRA_DICTATE_BEEP, false);
+@@ -621,6 +644,36 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+         return intent;
+     }
+ 
++    /**
++     * `contextualStrings` from the JS call: strings only, trimmed, blanks dropped, each capped at
++     * MAX_CONTEXTUAL_STRING_LENGTH code points (never splitting a surrogate pair), at most MAX_CONTEXTUAL_STRINGS
++     * entries. Null when nothing usable.
++     */
++    private static ArrayList<String> readContextualStrings(JSArray raw) {
++        if (raw == null) {
++            return null;
++        }
++        ArrayList<String> out = new ArrayList<>();
++        for (int i = 0; i < raw.length() && out.size() < MAX_CONTEXTUAL_STRINGS; i++) {
++            Object item = raw.opt(i);
++            if (!(item instanceof String)) {
++                continue;
++            }
++            String text = ((String) item).trim();
++            if (text.isEmpty()) {
++                continue;
++            }
++            if (text.codePointCount(0, text.length()) > MAX_CONTEXTUAL_STRING_LENGTH) {
++                text = text.substring(0, text.offsetByCodePoints(0, MAX_CONTEXTUAL_STRING_LENGTH)).trim();
++                if (text.isEmpty()) {
++                    continue;
++                }
++            }
++            out.add(text);
++        }
++        return out.isEmpty() ? null : out;
++    }
++
+     private void rebuildRecognizerLocked(PluginCall call, boolean partialResults, boolean useOnDeviceRecognition, long currentSessionId) {
+         if (speechRecognizer != null && speechRecognizerUsesOnDevice != useOnDeviceRecognition) {
+             destroyCurrentRecognizerLocked();
+@@ -797,6 +850,7 @@ public class SpeechRecognitionPlugin extends Plugin implements Constants {
+                     null,
+                     lastAllowForSilence,
+                     lastUseOnDeviceRecognition,
++                    lastContextualStrings,
+                     currentSessionId,
+                     true
+                 );
+diff --git a/node_modules/@capgo/capacitor-speech-recognition/dist/esm/definitions.d.ts b/node_modules/@capgo/capacitor-speech-recognition/dist/esm/definitions.d.ts
+index 9cd77cb..4b00ead 100644
+--- a/node_modules/@capgo/capacitor-speech-recognition/dist/esm/definitions.d.ts
++++ b/node_modules/@capgo/capacitor-speech-recognition/dist/esm/definitions.d.ts
+@@ -47,7 +47,10 @@ export interface SpeechRecognitionStartOptions {
+      * `preferLegacyRecognizer` — so contextual strings and on-device recognition can
+      * be used together.
+      *
+-     * Ignored by Android and by the iOS 26+ `SpeechAnalyzer` path.
++     * On Android 13+ (API 33) they are passed as `RecognizerIntent.EXTRA_BIASING_STRINGS`
++     * (trimmed, blanks dropped, each capped at 100 characters, at most 500 entries); whether
++     * the recognition service honours them is up to the service. Ignored on older Android
++     * versions and by the iOS 26+ `SpeechAnalyzer` path.
+      */
+     contextualStrings?: string[];
+     /**

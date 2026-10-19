@@ -5,13 +5,14 @@
  * Each listen() takes the next entry of `script` (the array is consumed IN PLACE, so a test may push more entries
  * later) and, after `delayMs`, resolves with those alternatives (best first, capped at maxAlternatives). Partial
  * text is emitted word by word from the first alternative before it resolves; stop() resolves early with the
- * whole entry. Special entries:
+ * whole entry (at once, or after `stopDelayMs` to model the recogniser's final-result latency after a hold-to-talk
+ * release). Special entries:
  * - []                         : silence, resolves [] (also when the script has run out).
  * - ['!SPEECH_ERROR:NETWORK']  : rejects with Error('SPEECH_ERROR:NETWORK') (any message after the '!').
  *
  * In the web build, setting `window.__KK_FAKE_SPEECH__ = [[...alts], ...]` before (or after) the app loads makes
- * platform().speech use this fake (see web.ts). `window.__KK_FAKE_SPEECH_OPTIONS__` = { delayMs, available,
- * permission } tunes it; fields are read on every call, so a test can flip them at any time.
+ * platform().speech use this fake (see web.ts). `window.__KK_FAKE_SPEECH_OPTIONS__` = { delayMs, stopDelayMs,
+ * available, permission } tunes it; fields are read on every call, so a test can flip them at any time.
  */
 import { clampAlternatives, cleanAlternatives, safeCall } from './speech-common';
 import type { Speech, SpeechListenOptions } from './types';
@@ -19,6 +20,8 @@ import type { Speech, SpeechListenOptions } from './types';
 export interface FakeSpeechOptions {
   /** Time from listen() to the result, default 30 ms. */
   delayMs?: number;
+  /** Time from stop() to the result (the whole entry), default 0: the pending listen() resolves at once. */
+  stopDelayMs?: number;
   /** What available() reports and whether listen() works, default true. */
   available?: boolean;
   /** Whether the microphone permission is (or becomes) granted, default true. */
@@ -48,9 +51,10 @@ export function createFakeSpeech(script: string[][], options: FakeSpeechOptions 
   let stopCount = 0;
   let permissionRequests = 0;
   let granted: boolean | null = null;
-  let active: { finish: () => void } | null = null;
+  let active: { finish: () => void; stop: () => void } | null = null;
 
   const delay = () => (typeof options.delayMs === 'number' && options.delayMs >= 0 ? options.delayMs : 30);
+  const stopDelay = () => (typeof options.stopDelayMs === 'number' && options.stopDelayMs > 0 ? options.stopDelayMs : 0);
   const isAvailable = () => options.available !== false;
 
   return {
@@ -84,7 +88,21 @@ export function createFakeSpeech(script: string[][], options: FakeSpeechOptions 
       return new Promise<string[]>((resolve, reject) => {
         const timers: Array<ReturnType<typeof setTimeout>> = [];
         let done = false;
+        let stopping = false;
         const session = {
+          /** stop(): the result comes at once, or after stopDelayMs; partials stop (nothing more is heard). */
+          stop: () => {
+            if (done || stopping) return;
+            stopping = true;
+            const ms = stopDelay();
+            if (ms <= 0) {
+              session.finish();
+              return;
+            }
+            for (const t of timers) clearTimeout(t);
+            timers.length = 0;
+            timers.push(setTimeout(session.finish, ms));
+          },
           finish: () => {
             if (done) return;
             done = true;
@@ -116,7 +134,7 @@ export function createFakeSpeech(script: string[][], options: FakeSpeechOptions 
 
     async stop() {
       stopCount++;
-      active?.finish();
+      active?.stop();
     },
   };
 }

@@ -502,6 +502,15 @@ export const en = {
   'voice.statCancel': 'Cancelled',
   'voice.statReset': 'Reset counters',
   'voice.privacyTitle': 'Voice privacy',
+  'voice.finishing': 'Finishing…',
+  'voice.hintRelease': 'Release to finish',
+  'voice.hintHold': 'Hold the mic and speak; release when done.',
+  'voice.holdQ': 'How the mic works',
+  'voice.holdOn': 'Hold to talk · release to finish',
+  'voice.holdOnSub': 'Press and hold the mic while you speak; lifting the finger ends listening at once.',
+  'voice.holdOff': 'Tap to talk',
+  'voice.holdOffSub': 'One tap starts; listening ends by itself or with Stop.',
+  'voice.holdHint': 'Hold the phone near your mouth: it helps in a noisy shop.',
   // ==== end voice entry ====
 
   // ==== accounts & web app (accounts-client agent; keys auth.* / web.* + the v2 server error codes) ====

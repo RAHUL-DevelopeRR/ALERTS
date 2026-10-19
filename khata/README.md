@@ -38,6 +38,13 @@ a picker. Unknown name → "Add new customer?". Settings → Voice entry has On/
 "Try voice" tester and local accuracy counters. Audio goes to Google's speech service (first tap shows the notice);
 the parser itself runs in the app. Details: `app/README.md` → "Voice entry (v2)".
 
+**Hold to talk and name biasing (2.0.1).** By default the mic is now press-and-hold: hold it, speak with the phone
+near your mouth, release to finish; the release ends listening at once, before the next customer at the counter
+speaks (Settings → Voice entry → "How the mic works" switches back to tap-to-talk). On Android 13+ the app also hands
+Google's recogniser the customer names as biasing strings (a small `patch-package` patch of the speech plugin,
+`app/patches/`), so "Ramu" is more likely to come back as Ramu than as a common word. Whether Google honours that
+biasing for Tamil is not verified: check it on the phone with a name it used to mis-hear.
+
 ## Optional: shop server (backup, several phones, logins, web app)
 
 Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`

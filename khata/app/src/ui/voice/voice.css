@@ -19,6 +19,14 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, .15);
 }
 .mic-btn:active { filter: brightness(.9); }
+/* hold-to-talk: the press must not become a scroll, a text selection or the long-press menu */
+.mic-btn, .icon-btn.mic-hold, .voice-mic {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
 .mic-btn .ic { width: 26px; height: 26px; }
 .mic-btn:disabled { opacity: .45; }
 
@@ -67,6 +75,9 @@
 }
 @keyframes voicePulse { from { transform: scale(1); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
 .voice-mic.thinking { background: var(--settled); }
+.voice-mic.finishing { background: var(--settled); }
+.voice-mic.listening:active { filter: brightness(.9); }
+.voice-hint.hold { color: var(--text); font-weight: 700; font-size: 17px; }
 .voice-mic.failed { background: var(--danger); }
 .voice-live {
   min-height: 56px;
@@ -79,6 +90,7 @@
 .voice-live.placeholder { color: #9aa59f; font-weight: 500; }
 .voice-hint { font-size: 15px; color: var(--muted); margin: 6px 0 2px; line-height: 1.45; }
 .voice-hint b { color: var(--text); font-size: 17px; }
+.voice-hint-tip { font-size: 14px; }
 .voice-msg { font-size: 16px; color: var(--danger); font-weight: 600; margin: 4px 0 2px; line-height: 1.45; overflow-wrap: anywhere; }
 .voice-actions { display: flex; margin-top: 12px; }
 .voice-actions .btn { flex: 1 1 0; min-width: 0; min-height: 56px; font-size: 18px; }

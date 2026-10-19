@@ -6,7 +6,7 @@
  * Screenshots: e2e/screenshots/NN-name.png. Exits non-zero on the first failed assertion.
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';

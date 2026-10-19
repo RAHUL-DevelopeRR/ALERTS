@@ -5,6 +5,11 @@
  *   node e2e/voice.mjs                 # vite build + vite preview on a free port
  *   E2E_URL=http://127.0.0.1:5173/ node e2e/voice.mjs
  * Screenshots: e2e/screenshots/voice-NN-name.png (only voice-*.png are replaced; flows.mjs owns the rest).
+ * Flows 13-16 cover hold-to-talk (press, release = finish, the "Finishing…" state), the short tap in hold mode,
+ * the overlay mic (tap = Stop, hold = retry) and Settings -> Tap to talk, all driven with the mouse (the desktop /
+ * web build). Flows 17-19 repeat the press, the tap and tap mode with REAL TOUCH input (CDP Input.dispatchTouchEvent
+ * for a hold, page.touchscreen.tap for a tap): a touch tap's click is synthesized at the finger's position, which by
+ * then is the listening sheet's scrim, so these flows assert that the sheet survives the release and the entry opens.
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, readdirSync, rmSync } from 'node:fs';
@@ -78,6 +83,7 @@ async function main() {
     window.__KK_FAKE_SPEECH_OPTIONS__ = { delayMs: 150 };
   });
   const page = await context.newPage();
+  const cdp = await context.newCDPSession(page);
   const consoleErrors = [];
   page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
@@ -457,6 +463,229 @@ async function main() {
     await tid('nav-settings').click();
     await tid('voice-on').click();
     await page.waitForFunction(() => document.querySelector('[data-testid="voice-on"]')?.getAttribute('aria-pressed') === 'true');
+
+    console.log('13. hold-to-talk (default): press the mic, speak, release -> "Finishing…" -> prefilled entry');
+    await tid('set-lang-ta').click();
+    await page.waitForFunction(() => document.querySelector('.topbar h1')?.textContent === 'அமைப்புகள்');
+    await scrollToVoice();
+    check((await pressed('voice-hold-on')) === 'true' && (await pressed('voice-hold-off')) === 'false', 'Settings: hold-to-talk is the default');
+    check((await text('[data-testid="sec-voice"]')).includes('வாயருகில்'), 'Settings: hint that holding the phone near the mouth helps');
+    await shot('settings-hold-ta');
+    await home();
+    /** Press (pointerdown) a button with the mouse and keep it down; the caller releases with page.mouse.up(). */
+    async function pressDown(id) {
+      const box = await tid(id).boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+    }
+    // The fake would answer by itself after delayMs; the release must come first and the result follows stopDelayMs later.
+    await speechOptions({ delayMs: 2000, stopDelayMs: 600 });
+    await say(['Kamala 70 kattinaan']);
+    const t0 = Date.now();
+    await pressDown('mic');
+    await tid('voice-sheet').waitFor();
+    check((await text('[data-testid="voice-state"]')) === 'கேட்கிறேன்…', 'holding: listening');
+    check((await text('[data-testid="voice-hint"]')) === 'விரலை எடுத்தால் முடியும்' && (await page.locator('.voice-hint.hold').count()) === 1, 'holding: hint reads "Release to finish"');
+    check(!(await tid('voice-done').isVisible()) && (await tid('voice-cancel').isVisible()), 'holding: no Stop button (the release is the end), Cancel stays');
+    await page.waitForFunction(() => /Kamala/.test(document.querySelector('[data-testid="voice-live"]')?.textContent ?? ''));
+    await shot('hold-listening-ta');
+    if (Date.now() - t0 < 600) await page.waitForTimeout(600 - (Date.now() - t0));
+    await page.mouse.up();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-state"]')?.textContent === 'முடிக்கிறேன்…');
+    check(true, 'release: "Finishing…"');
+    check(!(await tid('voice-done').isVisible()), 'finishing: no Stop button');
+    check((await page.locator('.voice-mic.listening').count()) === 0 && (await page.locator('.voice-mic.finishing').count()) === 1, 'finishing: pulse stopped');
+    check(!(await tid('voice-hint').isVisible()), 'finishing: no hint at all (nothing more can be said)');
+    await shot('hold-finishing-ta');
+    await tid('voice-sheet').waitFor({ state: 'detached', timeout: 8000 });
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Kamala' && (await text('[data-testid="amount"]')) === '₹70' && (await pressed('kind-RECEIVE')) === 'true', 'release delivered the entry: Kamala, Credit ₹70');
+    await shot('hold-entry-prefilled-ta');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    check((await text('.topbar h1')).startsWith('Kamala') && (await text('[data-testid="balance"]')) === '₹0' && (await page.locator('.toast').count()) === 0, 'nothing saved on release: Kamala still ₹0, no toast (back out)');
+
+    console.log('14. hold mode: a short tap (< 350 ms) still works like before');
+    await home();
+    await speechOptions({ delayMs: 2500, stopDelayMs: 0 });
+    await say(['Ravi 20 kattinaan']);
+    await tid('mic').click();
+    await tid('voice-sheet').waitFor();
+    check((await text('[data-testid="voice-hint"]')).includes('சொல்லுங்கள்') && (await page.locator('.voice-hint.hold').count()) === 0, 'tap: normal "Say:" hint, no "Release to finish"');
+    check((await text('[data-testid="voice-hint-hold"]')).includes('மைக்கை அழுத்திப் பிடித்து'), 'tap in hold mode: the hint also says the mic can be held');
+    check((await text('[data-testid="voice-done"]')) === 'போதும்' && (await tid('voice-done').isVisible()), 'tap: Stop offered');
+    await shot('hold-mode-tap-listening-ta');
+    await tid('voice-sheet').waitFor({ state: 'detached', timeout: 8000 });
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Ravi' && (await text('[data-testid="amount"]')) === '₹20', 'tap: listening ran to the end by itself, Ravi ₹20 prefilled');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+
+    console.log('15. overlay mic: short tap while listening = Stop; after "nothing heard", hold it to retry and release to finish');
+    await home();
+    await speechOptions({ delayMs: 10_000, stopDelayMs: 0 });
+    await say(['Kumar 30 kattinaan']);
+    await tid('mic').click();
+    await tid('voice-sheet').waitFor();
+    await tid('voice-mic').click();
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Kumar' && (await text('[data-testid="amount"]')) === '₹30', 'overlay mic tap stopped the session and delivered Kumar ₹30');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    await home();
+    await speechOptions({ delayMs: 150 });
+    await say([]);
+    await tid('mic').click();
+    await tid('voice-msg').waitFor();
+    await speechOptions({ delayMs: 2000, stopDelayMs: 300 });
+    await say(['Kamala 90 vaanginaal']);
+    const t1 = Date.now();
+    await pressDown('voice-mic');
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-state"]')?.textContent === 'கேட்கிறேன்…');
+    check((await text('[data-testid="voice-hint"]')) === 'விரலை எடுத்தால் முடியும்', 'overlay mic held: retry started with the "Release to finish" hint');
+    await page.waitForFunction(() => /Kamala/.test(document.querySelector('[data-testid="voice-live"]')?.textContent ?? ''));
+    await shot('hold-retry-listening-ta');
+    if (Date.now() - t1 < 600) await page.waitForTimeout(600 - (Date.now() - t1));
+    await page.mouse.up();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-state"]')?.textContent === 'முடிக்கிறேன்…');
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Kamala' && (await text('[data-testid="amount"]')) === '₹90' && (await pressed('kind-GIVE')) === 'true', 'overlay mic release delivered Kamala Debit ₹90');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+
+    console.log('16. Settings -> Tap to talk: holding does not finish on release; a click works as before');
+    await home();
+    await tid('nav-settings').click();
+    await page.locator('.screen[data-route="settings"]').waitFor();
+    await tid('voice-hold-off').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-hold-off"]')?.getAttribute('aria-pressed') === 'true');
+    await scrollToVoice();
+    await shot('settings-tap-mode-ta');
+    await home();
+    await speechOptions({ delayMs: 1500, stopDelayMs: 0 });
+    await say(['Ravi 40 kattinaan']);
+    await pressDown('mic');
+    await tid('voice-sheet').waitFor();
+    check((await page.locator('.voice-hint.hold').count()) === 0 && (await tid('voice-hint-hold').count()) === 0, 'tap mode: no hold hint while the mic is held, no "hold the mic" tip');
+    await page.waitForTimeout(600);
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+    check((await text('[data-testid="voice-state"]')) === 'கேட்கிறேன்…' && (await tid('voice-done').isVisible()), 'tap mode: releasing after 600 ms does not end the session (still listening, Stop offered)');
+    await tid('voice-sheet').waitFor({ state: 'detached', timeout: 8000 });
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Ravi' && (await text('[data-testid="amount"]')) === '₹40', 'tap mode: the recogniser ended the session itself, Ravi ₹40');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    await home();
+    await speechOptions({ delayMs: 150 });
+    await speak('mic', ['Kumar 55 kattinaan']);
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Kumar' && (await text('[data-testid="amount"]')) === '₹55', 'tap mode: click works as before');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    await home();
+    await tid('nav-settings').click();
+    await tid('voice-hold-on').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-hold-on"]')?.getAttribute('aria-pressed') === 'true');
+    await tid('set-lang-en').click();
+    await page.waitForFunction(() => document.querySelector('.topbar h1')?.textContent === 'Settings');
+    await scrollToVoice();
+    await shot('settings-hold-en');
+    await home();
+    await speechOptions({ delayMs: 2000, stopDelayMs: 600 });
+    await say(['Kamala 15 paid']);
+    await pressDown('mic');
+    await tid('voice-sheet').waitFor();
+    check((await text('[data-testid="voice-hint"]')) === 'Release to finish', 'English: "Release to finish"');
+    await page.waitForFunction(() => /Kamala/.test(document.querySelector('[data-testid="voice-live"]')?.textContent ?? ''));
+    await shot('hold-listening-en');
+    await page.mouse.up();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-state"]')?.textContent === 'Finishing…');
+    await shot('hold-finishing-en');
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('[data-testid="amount"]')) === '₹15', 'English hold release delivered ₹15');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+
+    // ---- real touch input. A finger is one touch point; Chromium then synthesizes pointer events and, on release,
+    // a click at the finger's position (now the sheet's scrim): the press must swallow it (press.ts).
+    const center = async (id) => {
+      const b = await tid(id).boundingBox();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    };
+    const touchStart = (pt) => cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [pt] });
+    const touchEnd = () => cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+    console.log('17. touch: hold the home mic with a finger (CDP touch), release -> sheet survives the release, "Finishing…", entry');
+    await home();
+    await speechOptions({ delayMs: 3000, stopDelayMs: 600 });
+    await say(['Kamala 80 paid']);
+    const t2 = Date.now();
+    await touchStart(await center('mic'));
+    await tid('voice-sheet').waitFor();
+    check((await text('[data-testid="voice-hint"]')) === 'Release to finish' && !(await tid('voice-done').isVisible()), 'touch hold: "Release to finish", no Stop');
+    await page.waitForFunction(() => /Kamala/.test(document.querySelector('[data-testid="voice-live"]')?.textContent ?? ''));
+    if (Date.now() - t2 < 700) await page.waitForTimeout(700 - (Date.now() - t2));
+    await touchEnd();
+    await page.waitForTimeout(300);
+    check((await page.locator('[data-testid="voice-sheet"]').count()) === 1 && (await text('[data-testid="voice-state"]')) === 'Finishing…', 'touch hold: 300 ms after the release the sheet is still there, finishing (the synthesized click did not cancel it)');
+    await shot('touch-hold-finishing-en');
+    await page.locator('.screen[data-route="entry"]').waitFor({ timeout: 5000 });
+    check((await text('.topbar .sub')) === 'Kamala' && (await text('[data-testid="amount"]')) === '₹80' && (await pressed('kind-RECEIVE')) === 'true', 'touch hold: release delivered Kamala, Credit ₹80');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    check((await text('[data-testid="balance"]')) === '₹0' && (await page.locator('.toast').count()) === 0, 'touch hold: nothing saved without a tap on Save');
+
+    console.log('18. touch: a plain finger tap on the mic in hold mode -> tap session stays open, entry');
+    await home();
+    await speechOptions({ delayMs: 1500, stopDelayMs: 0 });
+    await say(['Ravi 60 paid']);
+    const c18 = await center('mic');
+    await page.touchscreen.tap(c18.x, c18.y);
+    await tid('voice-sheet').waitFor();
+    await page.waitForTimeout(300);
+    check((await page.locator('[data-testid="voice-sheet"]').count()) === 1 && (await text('[data-testid="voice-state"]')) === 'Listening…', 'touch tap: 300 ms later the sheet is still listening');
+    check((await tid('voice-done').isVisible()) && (await page.locator('.voice-hint.hold').count()) === 0 && (await text('[data-testid="voice-hint-hold"]')).startsWith('Hold the mic'), 'touch tap: Stop offered, "Say:" hint plus the "hold the mic" tip');
+    await shot('touch-tap-listening-en');
+    await page.locator('.screen[data-route="entry"]').waitFor({ timeout: 5000 });
+    check((await text('.topbar .sub')) === 'Ravi' && (await text('[data-testid="amount"]')) === '₹60', 'touch tap: the session ran to the end by itself, Ravi ₹60');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+
+    console.log('19. touch in Tap-to-talk mode: a finger tap, and a 700 ms press that must NOT finish on release');
+    await home();
+    await tid('nav-settings').click();
+    await tid('voice-hold-off').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-hold-off"]')?.getAttribute('aria-pressed') === 'true');
+    await home();
+    await speechOptions({ delayMs: 1500, stopDelayMs: 0 });
+    await say(['Kumar 25 paid']);
+    const c19 = await center('mic');
+    await page.touchscreen.tap(c19.x, c19.y);
+    await tid('voice-sheet').waitFor();
+    await page.waitForTimeout(300);
+    check((await page.locator('[data-testid="voice-sheet"]').count()) === 1 && (await tid('voice-done').isVisible()) && (await tid('voice-hint-hold').count()) === 0, 'tap mode, touch tap: sheet still open with Stop, no hold tip');
+    await page.locator('.screen[data-route="entry"]').waitFor({ timeout: 5000 });
+    check((await text('.topbar .sub')) === 'Kumar' && (await text('[data-testid="amount"]')) === '₹25', 'tap mode, touch tap: Kumar ₹25');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    await home();
+    await speechOptions({ delayMs: 2000, stopDelayMs: 0 });
+    await say(['Ravi 35 paid']);
+    await touchStart(await center('mic'));
+    await tid('voice-sheet').waitFor();
+    await page.waitForTimeout(700);
+    await touchEnd();
+    await page.waitForTimeout(300);
+    check((await page.locator('[data-testid="voice-sheet"]').count()) === 1 && (await text('[data-testid="voice-state"]')) === 'Listening…' && (await tid('voice-done').isVisible()), 'tap mode, 700 ms touch press: release neither finishes nor cancels (still listening, Stop offered)');
+    await page.locator('.screen[data-route="entry"]').waitFor({ timeout: 5000 });
+    check((await text('.topbar .sub')) === 'Ravi' && (await text('[data-testid="amount"]')) === '₹35', 'tap mode, touch press: the recogniser ended the session itself, Ravi ₹35');
+    await page.keyboard.press('Escape');
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    await home();
+    await tid('nav-settings').click();
+    await tid('voice-hold-on').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-hold-on"]')?.getAttribute('aria-pressed') === 'true');
 
     check(consoleErrors.length === 0, `no console errors ${consoleErrors.join(' | ')}`);
   } catch (e) {

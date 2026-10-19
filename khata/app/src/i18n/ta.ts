@@ -504,6 +504,15 @@ export const ta: Record<MsgKey, string> = {
   'voice.statCancel': 'ரத்து செய்தது',
   'voice.statReset': 'எண்ணிக்கையை அழி',
   'voice.privacyTitle': 'குரல் தனியுரிமை',
+  'voice.finishing': 'முடிக்கிறேன்…',
+  'voice.hintRelease': 'விரலை எடுத்தால் முடியும்',
+  'voice.hintHold': 'மைக்கை அழுத்திப் பிடித்துப் பேசுங்கள்; முடிந்ததும் விடுங்கள்.',
+  'voice.holdQ': 'மைக் எப்படி வேலை செய்யும்?',
+  'voice.holdOn': 'அழுத்திப் பேசு · விட்டால் முடியும்',
+  'voice.holdOnSub': 'பேசும்போது மைக்கை அழுத்திப் பிடியுங்கள்; விரலை எடுத்ததும் கேட்பது உடனே நிற்கும்.',
+  'voice.holdOff': 'தட்டிப் பேசு',
+  'voice.holdOffSub': 'ஒரு முறை தட்டினால் தொடங்கும்; தானாகவோ “போதும்” தட்டினாலோ முடியும்.',
+  'voice.holdHint': 'போனை வாயருகில் வைத்துப் பேசுங்கள்: சத்தமான கடையில் உதவும்.',
   // ==== end voice entry ====
 
   // ==== accounts & web app (accounts-client agent; keys auth.* / web.* + the v2 server error codes) ====

@@ -61,13 +61,20 @@ export interface SpeechListenOptions {
   maxAlternatives?: number;
   /**
    * Phrases to bias recognition towards (customer names). Honoured only where the platform supports it:
-   * Android ignores them (the plugin does not pass EXTRA_BIASING_STRINGS); web passes them as
-   * SpeechRecognition.phrases only when the browser exposes SpeechRecognitionPhrase, and silently retries without
-   * them if the browser rejects them.
+   * Android 13+ gets them as EXTRA_BIASING_STRINGS (through the patched plugin; older Android ignores them); web
+   * passes them as SpeechRecognition.phrases only when the browser exposes SpeechRecognitionPhrase, and silently
+   * retries without them if the browser rejects them.
    */
   biasPhrases?: string[];
   /** Safety cap: listening is stopped after this many ms (default 15000). The UI's own limit should be shorter. */
   maxMs?: number;
+  /**
+   * Hold-to-talk: the mic is being held, so the session ends when the finger leaves (the UI calls stop() then).
+   * An adapter with its own end-of-speech timer (Android: PARTIAL_SETTLE_MS after the transcript last changed)
+   * must not end a held session by itself; a pause mid-sentence is the shopkeeper thinking, not the end. maxMs
+   * still caps it. When the press turns out to be a tap, the UI calls setHeld(false) and the timer applies again.
+   */
+  held?: boolean;
 }
 
 /**
@@ -99,4 +106,9 @@ export interface Speech {
   listen(opts: SpeechListenOptions): Promise<string[]>;
   /** Stop the current session (if any); the pending listen() resolves with the result so far. */
   stop(): Promise<void>;
+  /**
+   * Hold-to-talk: whether the mic is still held for the live session (see SpeechListenOptions.held). Optional:
+   * adapters without an end-of-speech timer of their own have nothing to switch.
+   */
+  setHeld?(held: boolean): void;
 }

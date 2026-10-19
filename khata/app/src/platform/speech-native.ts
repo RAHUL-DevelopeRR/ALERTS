@@ -19,13 +19,18 @@
  *     Gboard voice-typing mode in which Google may keep the session open across pauses instead of ending it after
  *     the usual ~1 s of end-of-speech silence. This adapter therefore ends the session itself once the transcript
  *     has stopped changing for PARTIAL_SETTLE_MS (see onPartialEvent); stopListening() then yields onResults or
- *     ERROR_CLIENT and the post-stop path resolves with what was heard.
+ *     ERROR_CLIENT and the post-stop path resolves with what was heard. Not while the mic is held (opts.held,
+ *     hold-to-talk): the release calls stop(), and a pause mid-sentence must not cut the shopkeeper off; setHeld()
+ *     switches the timer back on when the press turns out to be a tap.
  *   - 'error' {code, message, sessionId}: getErrorCode() names (NO_MATCH, SPEECH_TIMEOUT, NETWORK, ...), followed by
  *     'stopped' with reason 'silence' (NO_MATCH/SPEECH_TIMEOUT) or 'error'.
  * - stop(): posts stopListening() on the main thread; Google normally delivers onResults, and the plugin forces
  *   finishSession('userStop') after 500 ms if it does not.
- * - contextualStrings is ignored on Android (no EXTRA_BIASING_STRINGS in buildRecognizerIntent), so biasPhrases are
- *   not sent. CONFIDENCE_SCORES are not exposed by the plugin.
+ * - contextualStrings: the stock plugin ignores it on Android; this app patches the plugin (patches/@capgo+capacitor-
+ *   speech-recognition+8.3.2.patch, applied by patch-package on install) so start() puts the list into
+ *   RecognizerIntent.EXTRA_BIASING_STRINGS on Android 13+ (API 33; older versions get no extra). biasPhrases (the
+ *   customer names) are therefore sent, trimmed and de-duplicated (see biasList). Whether Google's service honours
+ *   them for ta-IN must be checked on a phone. CONFIDENCE_SCORES are not exposed by the plugin.
  * - Events are not retained (notifyListeners without retain), so listeners are attached before the first start().
  * - The plugin has no onPause hook (only handleOnDestroy tears the recogniser down), so native.ts calls stop() when
  *   the app goes to the background: Android 12+ cuts microphone access for background apps anyway, and the session
@@ -52,6 +57,25 @@ const STOP_FALLBACK_MS = 1500;
  * seconds after the utterance instead of at the UI's maxMs cap when Google does not end a DICTATION_MODE session.
  */
 export const PARTIAL_SETTLE_MS = 2500;
+/** Bias phrases sent per session (EXTRA_BIASING_STRINGS): at most this many, each at most BIAS_PHRASE_MAX_LEN chars. */
+export const MAX_BIAS_PHRASES = 200;
+export const BIAS_PHRASE_MAX_LEN = 100;
+
+/**
+ * biasPhrases -> contextualStrings: trimmed, whitespace collapsed, capped (on code points, so a surrogate pair is
+ * never split), de-duplicated, order kept; [] when none.
+ */
+export function biasList(phrases: readonly unknown[] | null | undefined): string[] {
+  const out: string[] = [];
+  if (!phrases) return out;
+  for (const p of phrases) {
+    if (typeof p !== 'string') continue;
+    const text = Array.from(p.replace(/\s+/g, ' ').trim()).slice(0, BIAS_PHRASE_MAX_LEN).join('').trim();
+    if (text && !out.includes(text)) out.push(text);
+    if (out.length >= MAX_BIAS_PHRASES) break;
+  }
+  return out;
+}
 
 interface Session {
   /** Plugin sessionId, known from the 'startingListening' event. */
@@ -64,6 +88,8 @@ interface Session {
    * stop() every error is treated as "end of session" and listen() resolves with what was heard so far.
    */
   stopping: boolean;
+  /** Hold-to-talk: the mic is held, so no settle timer; the release calls stop() (see opts.held / setHeld). */
+  held: boolean;
   max: number;
   settled: boolean;
   onPartial?: (text: string) => void;
@@ -98,6 +124,13 @@ export function createNativeSpeech(): Speech {
   /** True from our start() call until the plugin reports 'stopped' (or start() fails before starting). */
   let nativeBusy = false;
   let idleWaiters: Array<() => void> = [];
+  /** listen() calls still waiting (previous session, idle wait, listeners) before their session exists. */
+  let listenPending = 0;
+  /**
+   * A stop() that arrived during that wait (hold-to-talk: the finger left before the recogniser was even started).
+   * The waiting listen() then resolves with [] instead of starting a session nobody is speaking into.
+   */
+  let stopRequested = false;
 
   const markIdle = () => {
     nativeBusy = false;
@@ -131,6 +164,15 @@ export function createNativeSpeech(): Speech {
 
   const finishFromMatches = (s: Session) => settle(s, { alts: cleanAlternatives(s.matches, s.max) });
 
+  /** (Re)arm the stability cut-off: stop() PARTIAL_SETTLE_MS from now unless the transcript changes again. */
+  const armSettle = (s: Session) => {
+    if (s.settleTimer !== null) clearTimeout(s.settleTimer);
+    s.settleTimer = setTimeout(() => {
+      s.settleTimer = null;
+      if (current === s && !s.settled && !s.stopping) void stop();
+    }, PARTIAL_SETTLE_MS);
+  };
+
   const onPartialEvent = (ev: SpeechRecognitionPartialResultEvent) => {
     const s = current;
     if (!s || s.settled || s.id === null) return;
@@ -140,14 +182,12 @@ export function createNativeSpeech(): Speech {
     if (!text) return;
     safeCall(s.onPartial, text);
     // DICTATION_MODE: Google may not end the session by itself, so end it once the transcript stops changing.
-    // Not after our own stop(): the final onResults list arrives through this same event.
-    if (s.stopping || text === s.lastText) return;
+    // Not after our own stop(): the final onResults list arrives through this same event. Not while the mic is
+    // held either: the release ends the session (and maxMs caps it).
+    if (s.stopping) return;
+    const changed = text !== s.lastText;
     s.lastText = text;
-    if (s.settleTimer !== null) clearTimeout(s.settleTimer);
-    s.settleTimer = setTimeout(() => {
-      s.settleTimer = null;
-      if (current === s && !s.settled && !s.stopping) void stop();
-    }, PARTIAL_SETTLE_MS);
+    if (changed && !s.held) armSettle(s);
   };
 
   const onStateEvent = (ev: SpeechRecognitionListeningEvent) => {
@@ -189,6 +229,7 @@ export function createNativeSpeech(): Speech {
   const stop = async (): Promise<void> => {
     const s = current;
     if (!s || s.settled) {
+      if (listenPending > 0) stopRequested = true;
       if (nativeBusy) await SpeechRecognition.stop().catch(() => undefined);
       return;
     }
@@ -220,9 +261,17 @@ export function createNativeSpeech(): Speech {
     },
 
     async listen(opts: SpeechListenOptions) {
-      if (current && !current.settled) await stop();
-      await waitIdle(IDLE_WAIT_MS);
-      await ensureListeners();
+      listenPending++;
+      stopRequested = false;
+      try {
+        if (current && !current.settled) await stop();
+        await waitIdle(IDLE_WAIT_MS);
+        await ensureListeners();
+      } finally {
+        listenPending--;
+      }
+      const releasedEarly = stopRequested;
+      stopRequested = false;
 
       const max = clampAlternatives(opts.maxAlternatives);
       let resolve!: (alts: string[]) => void;
@@ -236,6 +285,7 @@ export function createNativeSpeech(): Speech {
         matches: [],
         errorCode: null,
         stopping: false,
+        held: !!opts.held,
         max,
         settled: false,
         onPartial: opts.onPartial,
@@ -246,15 +296,24 @@ export function createNativeSpeech(): Speech {
         settleTimer: null,
       };
       current = s;
+      if (releasedEarly) {
+        // stop() came while we were still waiting: nothing was heard, and starting now would record a bystander.
+        settle(s, { alts: [] });
+        return done;
+      }
       nativeBusy = true;
       try {
+        const contextualStrings = biasList(opts.biasPhrases);
         await SpeechRecognition.start({
           language: opts.lang,
           maxResults: max,
           partialResults: true,
           popup: false,
+          ...(contextualStrings.length ? { contextualStrings } : {}),
         });
         if (!s.settled) s.timers.push(setTimeout(() => void stop(), listenTimeout(opts.maxMs)));
+        // stop() during start() (a hold released at once): the plugin may have had nothing to stop yet, so ask again.
+        if (s.stopping && !s.settled) await SpeechRecognition.stop().catch(() => undefined);
       } catch (e) {
         const err = mapStartError(e);
         // The plugin emits 'startingListening' (which sets s.id) before any path that will later emit 'stopped'.
@@ -268,5 +327,18 @@ export function createNativeSpeech(): Speech {
     },
 
     stop,
+
+    setHeld(held) {
+      const s = current;
+      if (!s || s.settled || s.held === held) return;
+      s.held = held;
+      if (held) {
+        if (s.settleTimer !== null) clearTimeout(s.settleTimer);
+        s.settleTimer = null;
+      } else if (s.lastText && !s.stopping) {
+        // A short press turned out to be a tap: from now on the transcript settling ends the session, as in tap mode.
+        armSettle(s);
+      }
+    },
   };
 }

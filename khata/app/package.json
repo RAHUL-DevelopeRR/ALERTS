@@ -1,14 +1,17 @@
 {
   "name": "kadan-kanakku-app",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit -p . && vite build",
-    "build:android": "tsc --noEmit -p . && vite build --mode android && cap sync android",
+    "build:android": "node scripts/check-speech-patch.mjs && tsc --noEmit -p . && vite build --mode android && cap sync android",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "postinstall": "patch-package --error-on-fail",
+    "check:speech-patch": "node scripts/check-speech-patch.mjs",
+    "patch:speech": "patch-package @capgo/capacitor-speech-recognition --include 'android/src/|dist/esm/definitions\\.d\\.ts'"
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "^8.0.1",
@@ -31,6 +34,7 @@
   "devDependencies": {
     "@capacitor/cli": "^8.5.3",
     "@types/sql.js": "^1.4.11",
+    "patch-package": "^8.0.1",
     "playwright": "1.56.1",
     "sql.js": "^1.14.2",
     "typescript": "^7.0.2",

@@ -69,7 +69,7 @@ The only native library is `libsqlcipher.so`, which comes from `@capacitor-commu
 
 | Where | Engine | Notes |
 |---|---|---|
-| Android | Google `SpeechRecognizer` via `@capgo/capacitor-speech-recognition` **8.3.2** (pinned exactly: newest release at least two weeks old at install time; review the Capgo diff before bumping) | `src/platform/speech-native.ts`. Inline recognition (`popup:false`), `partialResults:true`, up to 5 alternatives requested (how many Google returns for `ta-IN` is unverified, often one). Customer-name biasing is not possible: the plugin ignores `contextualStrings` on Android. Needs Google's speech service (missing on non-GMS ROMs → `available()` false) and internet unless an offline pack is installed. |
+| Android | Google `SpeechRecognizer` via `@capgo/capacitor-speech-recognition` **8.3.2** (pinned exactly: newest release at least two weeks old at install time; review the Capgo diff before bumping) | `src/platform/speech-native.ts`. Inline recognition (`popup:false`), `partialResults:true`, up to 5 alternatives requested (how many Google returns for `ta-IN` is unverified, often one). Customer-name biasing: the stock plugin ignores `contextualStrings` on Android, so `patches/@capgo+capacitor-speech-recognition+8.3.2.patch` (applied by `patch-package` on `npm install`) makes `start()` put it into `RecognizerIntent.EXTRA_BIASING_STRINGS` on Android 13+ (see "Hold to talk and name biasing" below). Needs Google's speech service (missing on non-GMS ROMs → `available()` false) and internet unless an offline pack is installed. |
 | Browser / web app | Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`) | `src/platform/speech-web.ts`. Chrome is the tested target (audio goes to Google); Firefox has no API (`available()` false). Bias phrases are sent only where `SpeechRecognitionPhrase` exists. |
 | Tests / e2e | `createFakeSpeech(script)` | `src/platform/fake-speech.ts`. In the web build, `window.__KK_FAKE_SPEECH__ = [["ராமு 100 குடுத்தாச்சு", ...], ...]` (set before the first mic tap, e.g. with Playwright `addInitScript`) replaces the recogniser; `[]` = silence, `["!SPEECH_ERROR:NETWORK"]` = failure; `window.__KK_FAKE_SPEECH_OPTIONS__ = {delayMs, available, permission}`. |
 
@@ -77,7 +77,7 @@ The only native library is `libsqlcipher.so`, which comes from `@capacitor-commu
 
 Privacy: `SPEECH_PRIVACY_NOTE` (`src/platform/speech-common.ts`, re-exported from `src/platform/index.ts`) holds the Tamil and English notice that voice audio is sent to Google (Android's speech service, Chrome's backend), that internet is needed, that the app keeps no audio and that nothing is saved before Save is tapped. `localRecognitionAvailable(lang)` in `speech-web.ts` feature-detects Chrome 139+'s on-device mode (`SpeechRecognition.available({langs, processLocally:true})`) inside try/catch; it is informational only and `listen()` never sets `processLocally` (no Tamil pack is known).
 
-Plugin facts the Android adapter relies on (read from `node_modules/@capgo/capacitor-speech-recognition/android/.../SpeechRecognitionPlugin.java`, JS version 8.3.2, native `PLUGIN_VERSION` string "8.1.11"): `available()` = `SpeechRecognizer.isRecognitionAvailable`; `checkPermissions()`/`requestPermissions()` map the `speechRecognition` alias to `RECORD_AUDIO` (`granted`/`denied`/`prompt`); `start()` rejects with code `UNAVAILABLE`, message `Missing permission` or `Speech recognition is already running.`, otherwise resolves as soon as `startListening()` ran (`partialResults:true`) and reports through `listeningState` (`startingListening` → `started` → `stoppingListening` → `stopped`, with `sessionId`, `reason`, `errorCode`), `partialResults` (`matches`; also carries the final `onResults` list, `EXTRA_MAX_RESULTS` = `maxResults`) and `error` (`getErrorCode()` names). `stop()` posts `stopListening()` and forces `finishSession('userStop')` after 500 ms. `buildRecognizerIntent()` sets `EXTRA_LANGUAGE`, `EXTRA_MAX_RESULTS`, `EXTRA_PARTIAL_RESULTS`, `DICTATION_MODE` and no biasing strings; `prompt` only matters with `popup:true`. The plugin ships no native library and its manifest adds only `RECORD_AUDIO`.
+Plugin facts the Android adapter relies on (read from `node_modules/@capgo/capacitor-speech-recognition/android/.../SpeechRecognitionPlugin.java`, JS version 8.3.2, native `PLUGIN_VERSION` string "8.1.11"): `available()` = `SpeechRecognizer.isRecognitionAvailable`; `checkPermissions()`/`requestPermissions()` map the `speechRecognition` alias to `RECORD_AUDIO` (`granted`/`denied`/`prompt`); `start()` rejects with code `UNAVAILABLE`, message `Missing permission` or `Speech recognition is already running.`, otherwise resolves as soon as `startListening()` ran (`partialResults:true`) and reports through `listeningState` (`startingListening` → `started` → `stoppingListening` → `stopped`, with `sessionId`, `reason`, `errorCode`), `partialResults` (`matches`; also carries the final `onResults` list, `EXTRA_MAX_RESULTS` = `maxResults`) and `error` (`getErrorCode()` names). `stop()` posts `stopListening()` and forces `finishSession('userStop')` after 500 ms. `buildRecognizerIntent()` sets `EXTRA_LANGUAGE`, `EXTRA_MAX_RESULTS`, `EXTRA_PARTIAL_RESULTS`, `DICTATION_MODE` and (with the patch, Android 13+) `EXTRA_BIASING_STRINGS`; `prompt` only matters with `popup:true`. The plugin ships no native library and its manifest adds only `RECORD_AUDIO`.
 
 ## Signing a release
 
@@ -212,6 +212,29 @@ Known weak spots (in-distribution fixtures, not field data): a second number nex
 ("Senthil 300 pathu rooba" → ₹10, the keypad shows it and the shopkeeper corrects it); the amount/dative cross-check
 only helps when Google returns more than one alternative (ta-IN often returns one); honorifics and fillers are
 handled from a fixed list.
+
+### Hold to talk and name biasing (2.0.1)
+
+**Hold to talk** (Settings → Voice entry → "How the mic works", default on): press and hold a mic button, speak with
+the phone near the mouth, release to finish. The release ends the recogniser session at once (`releaseVoice()` in
+`src/ui/voice/listen.ts` → `speech.stop()`; the adapters resolve with what was heard so far) and the sheet shows
+"Finishing…" without a Stop button, so the session is over before a bystander speaks: in a noisy shop this replaces
+endpointing by silence. A press shorter than `HOLD_MIN_MS` (350 ms, `src/ui/voice/press.ts`) is a tap and listening
+goes on until Stop, the adapter's settle time or the 12 s cap; "Tap to talk" in Settings keeps the old behaviour for
+every press. The buttons use Pointer Events with pointer capture (`bindPress()`), suppress the long-press context menu
+and have `touch-action: none` / `user-select: none` (`voice.css`). The big mic in the sheet works the same way: a tap
+while listening is Stop, after a failure a press is "Try again" (hold and release, or tap). The scripted fake takes
+`stopDelayMs` (`window.__KK_FAKE_SPEECH_OPTIONS__`) so e2e can see the "Finishing…" state (`e2e/voice.mjs` flows
+13-16, screenshots `voice-*-hold-*.png`); the press logic is unit-tested in `test/ui.press.test.ts`.
+
+**Name biasing**: `speech-native.ts` now sends the customer names (`biasPhrases`, trimmed, de-duplicated, at most 200
+of at most 100 characters: `biasList()`) as `contextualStrings`. The plugin's Java `start()` is patched
+(`patches/@capgo+capacitor-speech-recognition+8.3.2.patch`, `patch-package`, regenerate with `npm run patch:speech`
+after editing the plugin in `node_modules`) to read the array (strings only, trimmed, capped at 100 chars / 500
+entries) and put it into `RecognizerIntent.EXTRA_BIASING_STRINGS` (API 33+) in `buildRecognizerIntent()`, including
+the continuous-PTT restart path; below Android 13 nothing is sent. The patch adds no permission (check the merged
+manifest after `assembleDebug`). **Whether Google's recogniser honours the biasing for `ta-IN` is unverified: it has to
+be checked on the phone** (say a customer name that Google used to mis-hear, with and without the names in the list).
 <!-- =================== end Voice entry =================== -->
 
 <!-- =================== Verification status (v2) =================== -->

@@ -15,6 +15,11 @@ export interface VoicePrefs {
   bare: 'RECEIVE' | 'GIVE';
   /** The privacy notice (audio goes to Google) was shown and accepted on the first mic tap. */
   notice_ok: boolean;
+  /**
+   * Hold-to-talk (default): press and hold the mic, speak, release to finish. Off = tap to talk: one tap starts,
+   * listening ends by itself (silence / settle / cap) or with Stop.
+   */
+  hold: boolean;
 }
 
 export interface VoiceStats {
@@ -30,7 +35,7 @@ export interface VoiceStats {
   cancelled: number;
 }
 
-export const DEFAULT_VOICE_PREFS: VoicePrefs = { on: true, lang: 'ta-IN', bare: 'RECEIVE', notice_ok: false };
+export const DEFAULT_VOICE_PREFS: VoicePrefs = { on: true, lang: 'ta-IN', bare: 'RECEIVE', notice_ok: false, hold: true };
 export const EMPTY_VOICE_STATS: VoiceStats = { heard: 0, saved: 0, amount_edited: 0, kind_changed: 0, cancelled: 0 };
 
 let cached: VoicePrefs | null = null;
@@ -45,6 +50,7 @@ export function parseVoicePrefs(json: string | null): VoicePrefs {
     if (o.lang === 'ta-IN' || o.lang === 'en-IN') out.lang = o.lang;
     if (o.bare === 'RECEIVE' || o.bare === 'GIVE') out.bare = o.bare;
     if (typeof o.notice_ok === 'boolean') out.notice_ok = o.notice_ok;
+    if (typeof o.hold === 'boolean') out.hold = o.hold;
   } catch {
     /* defaults */
   }
