@@ -252,6 +252,24 @@ amount, below the "confirm above" amount, not a repeat of the same customer/kind
 last minute, and not a payment larger than the due. Anything else (several entries in one breath, two Ramus, a new
 name, a missing direction, back-dated) goes to the keypad as before. Unit tests: `test/ui.quick-save.test.ts`; e2e:
 `e2e/voice.mjs` flow 20 (screenshots `voice-*-auto-save-card.png`, `voice-*-auto-saved.png`).
+### Shop slang for entries (2.1.1)
+
+Phrases where the direction comes from கடன் plus a common verb are now explicit (`nounverb` cues in
+`src/core/voice.ts`, resolved as `idiom:kadan-<verb>` in `resolveKind()`, confidence `high`, so they can auto-save):
+
+| Said | Means | Entry |
+|---|---|---|
+| கடன் சொல்லிருக்கான் / kadan sollirukkan, kadan sonnaan | asked to put it on credit | Debit |
+| கடன் வச்சிருக்கான் / kadan vachurikkan, kadan vachaan | has run up a debt | Debit |
+| கடன் கேட்டான் / kadan kettaan | asked for credit | Debit |
+| கடனை கட்டிட்டான் / kadanai kattitaan | paid the debt (the kattu verb decides) | Credit |
+| கடனை அடைச்சிட்டான் / kadanai adaichitaan | cleared the debt | Credit |
+| வரவு வச்சிருக்கான் / varavu vachirukkan | put it as varavu (the வரவு label decides) | Credit |
+
+The vai/sol/kel/adai verbs alone ("Ramu 100 vachirukkan") decide nothing and open the keypad without a direction;
+before 2.1.1 "vachirukkan" was fuzzy-matched to vaangirukkaan (Debit). These phrases are also sent to the recogniser
+as biasing strings after the customer names (`ENTRY_BIAS_PHRASES`, Tamil script for ta-IN). Fixtures: category
+`slang` in `test/fixtures/voice-utterances.json`; e2e: flow 20.
 <!-- =================== end Voice entry =================== -->
 
 <!-- =================== Verification status (v2) =================== -->

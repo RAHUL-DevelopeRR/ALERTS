@@ -736,6 +736,16 @@ async function main() {
     await page.keyboard.press('Escape');
     await home();
 
+    for (const [phrase, kind] of [['Ravi 33 kadan sollirukkan', 'Debit'], ['Ravi 34 varavu vachirukkan', 'Credit'], ['Ravi 36 kadan vachurikkan', 'Debit']]) {
+      await say([phrase]);
+      await tid('mic').click();
+      await tid('qs-card').waitFor({ timeout: 5000 });
+      check((await text('[data-testid="qs-kind"]')) === kind, `slang "${phrase}": auto-save card says ${kind}`);
+      if (phrase.includes('sollirukkan')) await shot('auto-save-slang');
+      await tid('qs-cancel').click();
+      await tid('qs-card').waitFor({ state: 'detached' });
+    }
+
     await tid('nav-settings').click();
     await tid('voice-off').click();
     await page.waitForFunction(() => document.querySelector('[data-testid="voice-off"]')?.getAttribute('aria-pressed') === 'true');

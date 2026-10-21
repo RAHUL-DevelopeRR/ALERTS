@@ -170,6 +170,7 @@ type CueType =
   | 'baaki'       // baaki/balance: GIVE but may just be stating the balance (weakest)
   | 'light'       // ezhuthu/podu/vai/add: direction from a noun, else GIVE
   | 'account'     // kanakkula: with a light verb = "write it in his account" -> GIVE
+  | 'nounverb'    // vai/sol/kel/adai after kadan: "kadan vachirukkan" / "kadan sollirukkan" -> GIVE, "kadan adaichaan" -> RECEIVE
   | 'kitta'       // neutral ("from/with")
   | 'thiruppi'    // "back": supports RECEIVE
   | 'negated';    // kudukkala / vaangala: did not pay/take -> no direction
@@ -286,7 +287,38 @@ export const CUES: Cue[] = [
   { label: 'debit', type: 'label', dir: G, en: true, forms: ['debit', 'debited', 'debt'] },
   { label: 'took', type: 'verb', dir: G, en: true, forms: ['took', 'taken', 'bought', 'purchased', 'borrowed', 'buy', 'purchase'] },
   { label: 'gave', type: 'gave', dir: null, en: true, forms: ['gave', 'given', 'give', 'gives'] },
-  { label: 'kadan', type: 'noun', dir: G, forms: ['கடன்', 'உதாரி', 'உதார்', 'லோன்', 'kadan', 'kadanu', 'udhaar', 'udhaari', 'udhar', 'udaar', 'udhari'] },
+  { label: 'kadan', type: 'noun', dir: G, forms: [
+    'கடன்', 'கடனை', 'கடனா', 'உதாரி', 'உதார்', 'லோன்', 'kadan', 'kadanu', 'kadanai', 'kadana', 'kadanaa', 'udhaar', 'udhaari',
+    'udhar', 'udaar', 'udhari',
+  ] },
+  // ---- verbs that take their direction from kadan (shop slang); alone they decide nothing.
+  // vai (put/keep): "kadan vachirukkan" = he has run up a debt -> GIVE; "varavu vachirukkan" -> the varavu label decides
+  { label: 'vachaan', type: 'nounverb', dir: G, forms: [
+    'வச்சான்', 'வைச்சான்', 'வெச்சான்', 'வைத்தான்', 'வச்சிருக்கான்', 'வச்சுருக்கான்', 'வைச்சிருக்கான்', 'வெச்சிருக்கான்', 'வைத்திருக்கான்',
+    'வச்சிட்டான்', 'வச்சுட்டான்', 'வச்சுக்கிட்டான்', 'வச்சாங்க', 'வச்சிருக்காங்க', 'வச்சாரு', 'வச்சிருக்காரு',
+    'vachaan', 'vachan', 'vechaan', 'vaichaan', 'vaithaan', 'vachirukkan', 'vachirukkaan', 'vachurikkan', 'vachurukkan',
+    'vechirukkan', 'vechirukkaan', 'vaichirukkaan', 'vachiruppan', 'vachittaan', 'vachitaan', 'vachuttaan', 'vachutaan',
+    'vachukittaan', 'vachukitaan', 'vachuttu', 'vachittu', 'vechittu', 'வச்சுட்டு', 'வச்சிட்டு', 'vachaanga', 'vachirukkaanga', 'vachaaru', 'vachirukkaaru',
+  ] },
+  // sol (tell): "kadan sollirukkan" = he asked to put it on credit -> GIVE
+  { label: 'sonnaan', type: 'nounverb', dir: G, forms: [
+    'சொன்னான்', 'சொன்னாங்க', 'சொன்னாரு', 'சொன்னா', 'சொல்லிட்டான்', 'சொல்லிருக்கான்', 'சொல்லியிருக்கான்', 'சொல்லிருக்காங்க',
+    'சொல்லிருக்காரு', 'சொல்லிட்டாங்க', 'சொல்லிட்டாரு',
+    'sonnaan', 'sonnan', 'sonnaanga', 'sonnaaru', 'sonnar', 'sollittaan', 'sollitaan', 'sollirukkan', 'sollirukkaan',
+    'solliyirukkaan', 'sollirukaan', 'solliruppan', 'sollirukkaanga', 'sollirukkaaru', 'sollittaanga', 'sollittaaru', 'sollirundhaan', 'sollirunthaan', 'sollirukken',
+    'solliyirukken', 'sonnen', 'சொல்லிருந்தான்', 'சொல்லிருக்கேன்', 'சொன்னேன்',
+  ] },
+  // kel (ask): "kadan kettaan" = he asked for credit -> GIVE
+  { label: 'kettaan', type: 'nounverb', dir: G, forms: [
+    'கேட்டான்', 'கேட்டாங்க', 'கேட்டாரு', 'கேட்டிருக்கான்', 'கேட்டுட்டான்', 'kettaan', 'kettan', 'kettaanga', 'kettaaru',
+    'kettirukkaan', 'kettirukkan', 'kettuttaan', 'kettutaan',
+  ] },
+  // adai (clear): "kadanai adaichaan" = he cleared the debt -> RECEIVE
+  { label: 'adaichaan', type: 'nounverb', dir: R, forms: [
+    'அடைச்சான்', 'அடைத்தான்', 'அடைச்சிட்டான்', 'அடைச்சுட்டான்', 'அடைச்சிருக்கான்', 'அடைச்சாங்க', 'அடைச்சாரு',
+    'adaichaan', 'adaichan', 'adachaan', 'adaithaan', 'adaichittaan', 'adaichitaan', 'adaichuttaan', 'adaichutaan',
+    'adaichirukkaan', 'adaichirukkan', 'adaichaanga', 'adaichaaru',
+  ] },
   { label: 'kadan', type: 'noun', dir: G, en: true, forms: ['loan', 'udhaar', 'owes', 'owe'] },
   { label: 'baaki', type: 'baaki', dir: G, forms: ['பாக்கி', 'baaki', 'paakki', 'baki', 'bakki', 'paaki'] },
   { label: 'baaki', type: 'baaki', dir: G, en: true, forms: ['balance', 'due', 'pending'] },
@@ -316,6 +348,19 @@ export const CUES: Cue[] = [
     'kudukkalai', 'kattalai',
   ] },
 ];
+
+/**
+ * Entry phrases handed to the recogniser as biasing strings after the customer names (Android 13+ / Chrome), so
+ * "kadan sollirukkan" is more likely to come back as those words than as something that merely sounds alike.
+ * Tamil script for ta-IN (what Google returns there), Latin for English.
+ */
+export const ENTRY_BIAS_PHRASES: { ta: readonly string[]; en: readonly string[] } = {
+  ta: [
+    'கட்டினான்', 'கட்டிட்டான்', 'வாங்கினான்', 'குடுத்தேன்', 'குடுத்தாச்சு', 'கடன் சொல்லிருக்கான்', 'கடனை கட்டிட்டான்',
+    'வரவு வச்சிருக்கான்', 'கடன் வச்சிருக்கான்', 'கடனை அடைச்சிட்டான்', 'கடன் கேட்டான்', 'பற்று', 'வரவு',
+  ],
+  en: ['paid', 'debit', 'credit', 'took', 'kattinaan', 'vaanginaan', 'kuduthen', 'kadan', 'varavu'],
+};
 
 /** Regex fallbacks on the folded form, for conjugations not listed above. */
 const CUE_PATTERNS: { re: RegExp; label: string; type: CueType; dir: 'GIVE' | 'RECEIVE' | null }[] = [
@@ -1109,6 +1154,8 @@ function resolveKind(ec: EntryCues, settings: VoiceSettings): KindResult {
     return { kind: G, reason: light ? 'idiom:kanakkula-ezhuthu' : 'idiom:kanakkula', explicit: light, weak: !light, own: true };
   }
   if (ec.creditLa) return { kind: G, reason: 'label:credit-la', explicit: true, weak: false, own: true };
+  const nv = ec.cues.find((c) => c.type === 'nounverb');
+  if (nv && has('noun')) return { kind: nv.dir, reason: `idiom:kadan-${nv.label}`, explicit: true, weak: false, own: true };
   if (has('noun')) return { kind: G, reason: 'noun:kadan', explicit: false, weak: false, own: true };
   if (ec.dative) return { kind: G, reason: 'dative', explicit: false, weak: false, own: true };
   if (light) return { kind: G, reason: 'light:ezhuthu', explicit: false, weak: false, own: true };

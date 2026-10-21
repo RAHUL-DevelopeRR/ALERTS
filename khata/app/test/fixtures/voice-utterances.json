@@ -383,5 +383,20 @@
 {"cat": "misspellings", "alts": ["Muthu 1000 katnan"], "customers": "with_kannan", "expect": {"name": "muthu", "amount": 1000, "kind": "RECEIVE", "kind_reason": "verb:kattinaan~", "confidence_max": "medium"}},
 {"cat": "misspellings", "alts": ["ராமு நூறு ரூபா கட்னாரு"], "customers": "with_kannan", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "kind_reason": "verb:kattinaan~", "confidence_max": "medium"}},
 {"cat": "misspellings", "alts": ["Kannan 1000 kattinaan"], "customers": "with_kannan", "expect": {"name": "kannan", "amount": 1000, "kind": "RECEIVE", "confidence": "high"}},
-{"cat": "misspellings", "alts": ["Muthu 1000 kattinaan, Kanan 200 vaanginaan"], "customers": "with_kannan", "expect": [{"name": "muthu", "amount": 1000, "kind": "RECEIVE"}, {"name": "kannan", "amount": 200, "kind": "GIVE"}]}
+{"cat": "misspellings", "alts": ["Muthu 1000 kattinaan, Kanan 200 vaanginaan"], "customers": "with_kannan", "expect": [{"name": "muthu", "amount": 1000, "kind": "RECEIVE"}, {"name": "kannan", "amount": 200, "kind": "GIVE"}]},
+{"cat": "slang", "alts": ["Ramu 100 kadan sollirukkan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["ராமு 100 கடன் சொல்லிருக்கான்"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 kadanai kattitaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["ராமு 100 கடனை கட்டிட்டான்"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 varavu vachirukkan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["ராமு 100 வரவு வச்சிருக்கான்"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 kadan vachurikkan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["ராமு 100 கடன் வச்சிருக்கான்"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 kadan kettaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 kadan sonnaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu kadan 100 vechirukkaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 kadanai adaichitaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["ராமு 100 கடனை அடைச்சிட்டான்"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 kadan vachuttu poitaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
+{"cat": "slang", "alts": ["Ramu 100 vachirukkan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": null}}
 ]

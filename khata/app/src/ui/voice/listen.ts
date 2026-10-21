@@ -13,7 +13,7 @@
  * Stop comes back and listening goes on until Stop, the adapter's settle time or the cap.
  */
 import { formatCode } from '../../core/ledger';
-import { parseUtterance, type CustomerMatch, type VoiceIntent } from '../../core/voice';
+import { ENTRY_BIAS_PHRASES, parseUtterance, type CustomerMatch, type VoiceIntent } from '../../core/voice';
 import type { HomeRow } from '../../data/types';
 import { getLang, t, type MsgKey } from '../../i18n';
 import { SPEECH_PRIVACY_NOTE } from '../../platform/index';
@@ -140,7 +140,9 @@ async function run(opts: VoiceStartOptions): Promise<void> {
   const rows = await app.repo.listHome();
   const customers = toVoiceCustomers(rows);
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const names = Array.from(new Set(customers.map((c) => c.name))).slice(0, 200);
+  const entryWords = prefs.lang.startsWith('ta') ? ENTRY_BIAS_PHRASES.ta : ENTRY_BIAS_PHRASES.en;
+  // names first (they matter most); the entry phrases fill the end of the 200-phrase budget
+  const names = [...Array.from(new Set(customers.map((c) => c.name))).slice(0, 200 - entryWords.length), ...entryWords];
 
   let cancelled = false;
   const ctl = openListening({

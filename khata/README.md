@@ -51,6 +51,10 @@ kattinaan") is shown on a card and **saved by itself after 3 seconds** (Cancel, 
 the message after saving). Large amounts, repeats, back-dated entries, payments above the due and anything unclear
 still open the keypad for checking. Settings → Voice entry can switch auto-save off.
 
+**Shop slang (2.1.1).** Voice also understands "கடன் சொல்லிருக்கான்" / "kadan sollirukkan" and "கடன்
+வச்சிருக்கான்" (Debit), "கடனை கட்டிட்டான்", "கடனை அடைச்சிட்டான்" and "வரவு வச்சிருக்கான்" (Credit); the list is in
+`app/README.md` → "Shop slang for entries".
+
 ## Optional: shop server (backup, several phones, logins, web app)
 
 Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`
