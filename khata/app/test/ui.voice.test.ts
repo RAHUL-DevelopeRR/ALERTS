@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseUtterance, type VoiceCustomer, type VoiceIntent } from '../src/core/voice';
 import type { HomeRow } from '../src/data/types';
-import { isStrong, planIntent, speechErrorKey, toVoiceCustomers } from '../src/ui/voice/plan';
+import { isStrong, offerNew, planIntent, speechErrorKey, toVoiceCustomers } from '../src/ui/voice/plan';
 import { prefillFromIntent } from '../src/ui/voice/prefill';
 import { DEFAULT_VOICE_PREFS, EMPTY_VOICE_STATS, parseVoicePrefs, parseVoiceStats } from '../src/ui/voice/prefs';
 
@@ -68,12 +68,16 @@ describe('planIntent', () => {
     const [it2] = parse(['baaki evvalavu'], customers, 'r2');
     expect(planIntent(it2, { contextCustomerId: 'r2' })).toMatchObject({ type: 'balance', customerId: 'r2' });
   });
-  it('a loose single match asks instead of opening the keypad', () => {
+  it('a loose single match is a new customer, the near name offered as "Did you mean"', () => {
     expect(isStrong([{ id: 'a', score: 0.7 }])).toBe(false);
     expect(isStrong([{ id: 'a', score: 0.9 }, { id: 'b', score: 0.85 }])).toBe(false);
     expect(isStrong([{ id: 'a', score: 0.9 }, { id: 'b', score: 0.7 }])).toBe(true);
     const loose: VoiceIntent = { heard: 'x', name_text: 'Ramesh', matches: [{ id: 'r1', score: 0.7 }], amount_paise: 100, kind: 'GIVE', kind_reason: 'verb', note: null, confidence: 'low' };
-    expect(planIntent(loose).type).toBe('pick');
+    expect(planIntent(loose)).toMatchObject({ type: 'new', name: 'Ramesh', similar: [{ id: 'r1', score: 0.7 }] });
+    const near: VoiceIntent = { ...loose, matches: [{ id: 'r1', score: 0.82 }] };
+    expect(planIntent(near).type).toBe('pick');
+    expect(offerNew(near)).toBe(true);
+    expect(offerNew({ ...loose, matches: [{ id: 'r1', score: 1 }] })).toBe(false);
   });
 });
 

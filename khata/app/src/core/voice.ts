@@ -44,6 +44,8 @@ export interface VoiceCustomer {
   erased_at?: string | null;
   /** Optional (HomeRow has it). Archived customers are only matched while they still owe or are owed money. */
   balance_paise?: number;
+  /** Spoken forms learned on this phone (the shopkeeper picked this customer for them); they match like the name. */
+  aliases?: string[];
 }
 
 export interface VoiceSettings {
@@ -130,6 +132,43 @@ export function levenshtein(a: string, b: string): number {
   return prev[b.length];
 }
 
+/**
+ * Names: Levenshtein where e/i and o/u swaps cost half (recognisers write "Ramo" for Ramu, "Selvee" for Selvi) and
+ * the short u/i Tamil puts between two consonants costs a quarter (பிரியா "piriya" = Priya, லட்சுமி "laksumi" =
+ * Lakshmi, பிரகாஷ் "pirakas" = Prakash). Any consonant change, and a vowel at the end (Kumar / Kumari), costs a
+ * full edit, so Ramu / Raju / Rahul stay different names.
+ */
+function nameDist(a: string, b: string): number {
+  if (a === b) return 0;
+  const vowel = (c: string | undefined) => c === undefined || 'aeiouy'.includes(c);
+  const half = (x: string, y: string) => (x === 'e' && y === 'i') || (x === 'i' && y === 'e') || (x === 'o' && y === 'u') || (x === 'u' && y === 'o');
+  // dropping s[k] (u or i) between two consonants
+  const indel = (s: string, k: number) => ((s[k] === 'u' || s[k] === 'i') && k > 0 && !vowel(s[k - 1]) && !vowel(s[k + 1]) ? 0.25 : 1);
+  let prev = new Array<number>(b.length + 1);
+  let cur = new Array<number>(b.length + 1);
+  prev[0] = 0;
+  for (let j = 1; j <= b.length; j++) prev[j] = prev[j - 1] + indel(b, j - 1);
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = prev[0] + indel(a, i - 1);
+    for (let j = 1; j <= b.length; j++) {
+      const x = a[i - 1];
+      const y = b[j - 1];
+      const cost = x === y ? 0 : half(x, y) ? 0.5 : 1;
+      cur[j] = Math.min(prev[j] + indel(a, i - 1), cur[j - 1] + indel(b, j - 1), prev[j - 1] + cost);
+    }
+    [prev, cur] = [cur, prev];
+  }
+  return prev[b.length];
+}
+
+function nameSim(a: string, b: string): number {
+  if (!a || !b) return 0;
+  // a final -a / -i makes another name (Kumar / Kumari, Vasanth / Vasantha, Raman / Ramani): never "the same"
+  const [s1, l1] = a.length < b.length ? [a, b] : [b, a];
+  if (l1.length === s1.length + 1 && l1.startsWith(s1) && (l1.endsWith('a') || l1.endsWith('i'))) return Math.min(0.75, 1 - 1 / l1.length);
+  return 1 - nameDist(a, b) / Math.max(a.length, b.length);
+}
+
 function sim(a: string, b: string): number {
   if (!a || !b) return 0;
   const m = Math.max(a.length, b.length);
@@ -147,7 +186,9 @@ function foldWord(w: string): string {
  * "kh/ph/bh" lose the h; ஃப ("hp") is "p".
  */
 function nameKey(w: string): string {
-  return foldWord(w).replace(/x/g, 'ks').replace(/ts/g, 'ks').replace(/hp/g, 'p').replace(/([kptsnmlrv])h/g, '$1');
+  // Tamil has no h: ராகுல் / மோகன் come back as "rakul" / "mokan", so an h between vowels is a k (Rahul = Raghul = ராகுல்).
+  return foldWord(w).replace(/x/g, 'ks').replace(/ts/g, 'ks').replace(/hp/g, 'p').replace(/([kptsnmlrv])h/g, '$1')
+    .replace(/([aeiou])h(?=[aeiou])/g, '$1k');
 }
 
 /** Tamil enunciative final -u ("Kumaru" for Kumar) dropped for a secondary comparison. */
@@ -823,6 +864,7 @@ function indexCustomers(customers: VoiceCustomer[]): IndexedCustomer[] {
     const forms = new Set<string>();
     forms.add(foldPhrase(c.name));
     if (c.search_name) forms.add(foldPhrase(c.search_name));
+    for (const a of c.aliases ?? []) forms.add(foldPhrase(a));
     forms.delete('');
     const firstWords = new Set([...forms].map((f) => f.split(' ')[0]));
     out.push({ c, forms: [...forms], key: searchKey(c), firstWords });
@@ -839,22 +881,30 @@ function scoreCustomer(q: string, qRaw: string, ic: IndexedCustomer): number {
   for (const f of ic.forms) {
     const fj = f.replace(/ /g, '');
     const fWords = f.split(' ');
-    best = Math.max(best, sim(qj, fj), 0.95 * sim(dropU(qj), dropU(fj)));
+    best = Math.max(best, nameSim(qj, fj), 0.95 * nameSim(dropU(qj), dropU(fj)));
     if (fWords.length > qWords.length) {
       const head = fWords.slice(0, qWords.length).join('');
-      best = Math.max(best, 0.95 * sim(qj, head), 0.9 * sim(dropU(qj), dropU(head)));
+      best = Math.max(best, 0.95 * nameSim(qj, head), 0.9 * nameSim(dropU(qj), dropU(head)));
       // any other word of the name ("Tea Kadai Ramu")
       for (let i = 1; i <= fWords.length - qWords.length; i++) {
-        best = Math.max(best, 0.8 * sim(qj, fWords.slice(i, i + qWords.length).join('')));
+        best = Math.max(best, 0.8 * nameSim(qj, fWords.slice(i, i + qWords.length).join('')));
       }
     }
   }
-  if (qj.length >= 3 && matchesQuery(ic.key, qRaw)) best = Math.max(best, 0.8);
+  // The start of a longer name ("Mani" for Manikandan) is a candidate to pick; the middle of one ("Arun" in Varun)
+  // or a match on the note / phone only is weaker, so it is offered under "Add new" instead of above it.
+  if (qj.length >= 3 && ic.forms.some((f) => f.split(' ').some((w) => w.startsWith(qj)))) best = Math.max(best, 0.8);
+  else if (qj.length >= 3 && matchesQuery(ic.key, qRaw)) best = Math.max(best, 0.7);
   if (qj.length <= 2) return best === 1 ? 1 : 0;
   return best;
 }
 
 const MATCH_FLOOR = 0.6;
+
+/** Folded key of a spoken name (what aliases are stored and compared by). */
+export function nameFold(text: string): string {
+  return foldPhrase(String(text ?? '').normalize('NFC'));
+}
 
 /**
  * Rank customers for a spoken name. Score 0..1; same-name customers tie. "C-0042" / "C 42" / "code 42" match

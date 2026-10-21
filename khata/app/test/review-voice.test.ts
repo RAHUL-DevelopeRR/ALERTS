@@ -17,6 +17,7 @@
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { parseUtterance, type VoiceCustomer, type VoiceIntent, type VoiceSettings } from '../src/core/voice';
+import { NEW_NAME_BELOW } from '../src/ui/voice/plan';
 import fixtures from './fixtures/voice-utterances.json';
 
 type Kind = 'GIVE' | 'RECEIVE' | null;
@@ -229,7 +230,7 @@ function run(cs: Case): Row {
     const g = got[i];
     const top = g.matches[0];
     const clear = !!top && (g.matches.length < 2 || g.matches[1].score < top.score);
-    const nameOk = w.name === null ? g.matches.length === 0 : !!top && top.id === w.name && clear;
+    const nameOk = w.name === null ? (g.matches[0]?.score ?? 0) < NEW_NAME_BELOW : !!top && top.id === w.name && clear;
     const wantPaise = w.amount === null ? null : Math.round(w.amount * 100);
     const amountOk = g.amount_paise === wantPaise;
     const kindOk = g.kind === w.kind;

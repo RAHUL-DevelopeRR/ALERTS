@@ -18,6 +18,7 @@ import * as router from '../router';
 import { micIcon } from './icons';
 import { voicePreflight } from './listen';
 import { planIntent, speechErrorKey, toVoiceCustomers } from './plan';
+import { forgetAliases, loadAliases, type Alias } from './aliases';
 import { loadVoicePrefs, loadVoiceStats, resetVoiceStats, saveVoicePrefs, type VoicePrefs, type VoiceStats } from './prefs';
 
 function block(...children: Child[]): HTMLElement {
@@ -112,7 +113,11 @@ function describeIntents(intents: VoiceIntent[], names: Map<string, string>): HT
   intents.forEach((it, i) => {
     const plan = planIntent(it);
     let who: string;
-    if (plan.type === 'entry' || (plan.type === 'balance' && plan.customerId)) who = names.get((plan as { customerId: string }).customerId) ?? '?';
+    if (plan.type === 'entry' || (plan.type === 'balance' && plan.customerId)) {
+      who = names.get((plan as { customerId: string }).customerId) ?? '?';
+      const sc = it.matches[0]?.score ?? 1;
+      if (sc < 1 && it.name_text) who += ` (${t('voice.resNear', { heard: it.name_text, pct: Math.round(sc * 100) })})`;
+    }
     else if (plan.type === 'pick') who = t('voice.resSeveral', { n: it.matches.length });
     else if (plan.type === 'new') who = t('voice.resNew', { name: plan.name });
     else who = t('voice.resNone');
@@ -138,7 +143,7 @@ function tryBlock(p: VoicePrefs): HTMLElement {
   const resultHost = h('div', null);
   const show = async (alts: string[]): Promise<void> => {
     const rows = await app.repo.listHome();
-    const customers = toVoiceCustomers(rows);
+    const customers = toVoiceCustomers(rows, await loadAliases());
     const names = new Map(rows.map((r) => [r.id, r.name]));
     const intents = parseUtterance(alts, customers, { bareKuduthaachu: p.bare });
     clear(resultHost);
@@ -204,9 +209,28 @@ function statsBlock(st: VoiceStats): HTMLElement {
   );
 }
 
+/** Names learned on this phone ("Raghul" -> Rahul), with a button to forget them all. */
+function aliasBlock(list: Alias[], names: Map<string, string>): HTMLElement {
+  const shown = list.filter(([, id]) => names.has(id));
+  const items = shown.slice(-20).reverse().map(([heard, id]) => h('li', null, h('span', { text: `“${heard}” → ` }), h('b', { text: names.get(id)! })));
+  const forget = button(t('voice.aliasForget'), () => {
+    void forgetAliases().then(() => router.rerender(), (e) => toast(errorText(e), { error: true }));
+  }, 'btn btn-block', { 'data-testid': 'voice-alias-forget' });
+  if (!shown.length) forget.disabled = true;
+  return h(
+    'div',
+    { attrs: { 'data-testid': 'voice-aliases' } },
+    h('span', { class: 'field-label', text: t('voice.aliasTitle', { n: shown.length }) }),
+    h('p', { class: 'input-help', text: t('voice.aliasHelp') }),
+    items.length ? h('ul', 'voice-alias-list', items) : null,
+    forget,
+  );
+}
+
 /** The whole "Voice entry" section (a <section> like the others in settings.ts). */
 export async function voiceSettingsSection(): Promise<HTMLElement> {
-  const [p, st] = await Promise.all([loadVoicePrefs(), loadVoiceStats()]);
+  const [p, st, aliases, rows] = await Promise.all([loadVoicePrefs(), loadVoiceStats(), loadAliases(), app.repo.listHome()]);
+  const names = new Map(rows.filter((r) => !r.erased_at).map((r) => [r.id, r.name]));
   return h(
     'section',
     { attrs: { id: 'sec-voice', 'data-testid': 'sec-voice' } },
@@ -222,6 +246,7 @@ export async function voiceSettingsSection(): Promise<HTMLElement> {
             block(h('span', { class: 'field-label', text: t('voice.autoQ') }), autoChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.bareQ') }), bareChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.try') }), tryBlock(p)),
+            block(aliasBlock(aliases, names)),
             block(statsBlock(st)),
           ]
         : null,

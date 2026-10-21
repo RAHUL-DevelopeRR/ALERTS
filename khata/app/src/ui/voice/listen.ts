@@ -24,7 +24,8 @@ import { money, toneClass } from '../format';
 import * as router from '../router';
 import { signedBal } from '../screens/customer';
 import { micIcon } from './icons';
-import { planIntent, speechErrorKey, toVoiceCustomers } from './plan';
+import { offerNew, planIntent, speechErrorKey, toVoiceCustomers } from './plan';
+import { learnAlias, loadAliases } from './aliases';
 import { prefillFromIntent, type VoicePrefill } from './prefill';
 import { bindPress } from './press';
 import { quickSave } from './quick-save';
@@ -138,7 +139,7 @@ async function run(opts: VoiceStartOptions): Promise<void> {
   if (!(await voicePreflight())) return;
 
   const rows = await app.repo.listHome();
-  const customers = toVoiceCustomers(rows);
+  const customers = toVoiceCustomers(rows, await loadAliases());
   const byId = new Map(rows.map((r) => [r.id, r]));
   const entryWords = prefs.lang.startsWith('ta') ? ENTRY_BIAS_PHRASES.ta : ENTRY_BIAS_PHRASES.en;
   // names first (they matter most); the entry phrases fill the end of the 200-phrase budget
@@ -359,7 +360,12 @@ async function runQueue(intents: VoiceIntent[], byId: Map<string, HomeRow>, opts
     const plan = planIntent(intent, opts.contextCustomerId ? { contextCustomerId: opts.contextCustomerId } : {});
     const prefill = prefillFromIntent(intent, { index: i + 1, total: intents.length });
     if (i + 1 < intents.length) prefill.next = () => void step(i + 1);
-    const newName = intent.name_text && !intent.matches.length ? intent.name_text : null;
+    const newName = offerNew(intent) ? intent.name_text : null;
+    /** The shopkeeper chose this customer for a name that was not exactly theirs: remember the spoken form. */
+    const chose = async (id: string): Promise<void> => {
+      if (newName) await learnAlias(newName, id).catch(() => undefined);
+      await openEntry(id, prefill);
+    };
     switch (plan.type) {
       case 'entry': {
         // A single clear entry is saved from a small card after a countdown; anything else opens the keypad.
@@ -374,20 +380,15 @@ async function runQueue(intents: VoiceIntent[], byId: Map<string, HomeRow>, opts
         const id = await pickCustomer({ heard: intent.heard, candidates: plan.candidates, byId, newName });
         if (id === null) return;
         if (id === 'new') await addNew(newName ?? intent.name_text ?? '', prefill);
-        else await openEntry(id, prefill);
+        else await chose(id);
         return;
       }
       case 'new': {
-        const ok = await dialog<boolean>({
-          title: t('voice.addNewTitle'),
-          body: h('div', null, h('p', { class: 'muted', text: t('voice.heard', { text: intent.heard }) }), h('p', { text: t('voice.addNewBody', { name: plan.name }) })),
-          buttons: [
-            { label: t('common.cancel'), value: false },
-            { label: t('voice.addNew', { name: plan.name }), value: true, kind: 'primary' },
-          ],
-          dismissValue: false,
-        });
-        if (ok) await addNew(plan.name, prefill);
+        // A name nobody has (or only a different, similar name has): adding it comes first, the near names after.
+        const id = await pickCustomer({ heard: intent.heard, candidates: plan.similar, byId, newName: plan.name, isNew: true });
+        if (id === null) return;
+        if (id === 'new') await addNew(plan.name, prefill);
+        else await chose(id);
         return;
       }
       case 'balance': {
@@ -426,7 +427,7 @@ async function runQueue(intents: VoiceIntent[], byId: Map<string, HomeRow>, opts
 }
 
 /** Bottom sheet: which customer did you mean? Resolves an id, 'new' (add "<name>") or null (cancel). */
-function pickCustomer(o: { heard: string; candidates: CustomerMatch[]; byId: Map<string, HomeRow>; newName: string | null }): Promise<string | 'new' | null> {
+function pickCustomer(o: { heard: string; candidates: CustomerMatch[]; byId: Map<string, HomeRow>; newName: string | null; isNew?: boolean }): Promise<string | 'new' | null> {
   return new Promise((resolve) => {
     let done = false;
     const finish = (v: string | 'new' | null): void => {
@@ -436,6 +437,13 @@ function pickCustomer(o: { heard: string; candidates: CustomerMatch[]; byId: Map
       resolve(v);
     };
     const items: HTMLElement[] = [];
+    const addBtn = o.newName
+      ? h('button', { class: `sheet-item${o.isNew ? ' voice-new-add' : ''}`, attrs: { type: 'button', 'data-testid': 'voice-pick-new' }, on: { click: () => finish('new') } }, h('span', { class: 'sheet-label', text: t('voice.addNew', { name: o.newName }) }))
+      : null;
+    if (o.isNew && addBtn) {
+      items.push(h('p', { class: 'voice-new-body', text: t('voice.addNewBody', { name: o.newName! }) }), addBtn);
+      if (o.candidates.length) items.push(h('div', { class: 'voice-similar', text: t('voice.didYouMean') }));
+    }
     for (const m of o.candidates) {
       const r = o.byId.get(m.id);
       if (!r) continue;
@@ -455,14 +463,12 @@ function pickCustomer(o: { heard: string; candidates: CustomerMatch[]; byId: Map
         ),
       );
     }
-    if (o.newName) {
-      items.push(h('button', { class: 'sheet-item', attrs: { type: 'button', 'data-testid': 'voice-pick-new' }, on: { click: () => finish('new') } }, h('span', { class: 'sheet-label', text: t('voice.addNew', { name: o.newName }) })));
-    }
+    if (!o.isNew && addBtn) items.push(addBtn);
     const sheet = h(
       'div',
-      { class: 'sheet', attrs: { role: 'dialog', 'aria-modal': 'true', 'data-testid': 'voice-picker' } },
+      { class: 'sheet', attrs: { role: 'dialog', 'aria-modal': 'true', 'data-testid': o.isNew ? 'voice-new' : 'voice-picker' } },
       h('div', 'sheet-grip'),
-      h('div', { class: 'sheet-title', text: t('voice.pickTitle') }),
+      h('div', { class: 'sheet-title', text: o.isNew ? t('voice.addNewTitle') : t('voice.pickTitle') }),
       h('div', { class: 'sheet-subtitle', text: t('voice.heard', { text: o.heard }) }),
       items,
       h('button', { class: 'sheet-item sheet-cancel', attrs: { type: 'button' }, on: { click: () => finish(null) } }, t('common.cancel')),

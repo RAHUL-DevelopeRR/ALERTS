@@ -134,6 +134,8 @@ export const META_KEYS = [
   'last_pairing',
   /** Voice entry (v2, local only): JSON prefs {on, lang, bare, notice_ok} and the accuracy counters {heard, saved, ...}. */
   'voice_prefs', 'voice_stats',
+  /** Spoken name -> customer id pairs learned on this phone (src/ui/voice/aliases.ts). */
+  'voice_aliases',
 ] as const;
 export type MetaKey = (typeof META_KEYS)[number];
 

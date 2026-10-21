@@ -7,7 +7,8 @@
  * Only for the safest case (Settings → Voice entry → auto-save, default on): parser confidence 'high' (one clear
  * customer, an undisputed amount, an explicit direction word), today's date, below the "confirm above" amount, not a
  * repeat of an entry saved in the last minute, and not a payment larger than the due. Everything else goes to the
- * keypad exactly as before.
+ * keypad exactly as before. The name must be exact too (its own spelling in either script, or a form learned on this
+ * phone): a near name like "Raghul" for Rahul opens the keypad so the shopkeeper sees which customer was picked.
  */
 import type { VoiceIntent } from '../../core/voice';
 import { amountInWords, formatCode, formatINR } from '../../core/ledger';
@@ -19,6 +20,7 @@ import { pushLayer, toast } from '../components/overlay';
 import { errorText } from '../errors';
 import * as router from '../router';
 import { signedBal } from '../screens/customer';
+import { EXACT_SCORE } from './plan';
 import { bumpVoiceStats, voicePrefs } from './prefs';
 
 /** Seconds the card waits before saving on its own. */
@@ -29,9 +31,11 @@ export type QuickSaveResult = 'saved' | 'edit' | 'cancel' | 'skip';
 /** Pure eligibility check (unit-tested): may this intent be auto-saved? */
 export function autoSaveEligible(
   intent: Pick<VoiceIntent, 'confidence' | 'kind' | 'amount_paise' | 'date_offset' | 'amount_alternatives'>,
-  ctx: { autosave: boolean; confirmAbovePaise: number; balancePaise: number; recentDuplicate: boolean },
+  ctx: { autosave: boolean; confirmAbovePaise: number; balancePaise: number; recentDuplicate: boolean; nameExact?: boolean },
 ): boolean {
   if (!ctx.autosave) return false;
+  // a near name ("Raghul" for Rahul) is shown on the keypad to check; an exact or learned name may save itself
+  if (ctx.nameExact === false) return false;
   if (intent.confidence !== 'high' || !intent.kind || !intent.amount_paise || intent.amount_paise <= 0) return false;
   if (intent.date_offset) return false;
   if (intent.amount_alternatives && intent.amount_alternatives.some((a) => a !== intent.amount_paise)) return false;
@@ -49,7 +53,7 @@ export async function quickSave(intent: VoiceIntent, customerId: string, row: Ho
   const settings = await refreshSettings();
   const balance = row ? row.balance_paise : await app.repo.balance(customerId);
   const dup = await app.repo.recentDuplicate(customerId, kind, amount);
-  if (!autoSaveEligible(intent, { autosave: voicePrefs().autosave, confirmAbovePaise: settings.confirm_above_paise, balancePaise: balance, recentDuplicate: dup })) return 'skip';
+  if (!autoSaveEligible(intent, { autosave: voicePrefs().autosave, confirmAbovePaise: settings.confirm_above_paise, balancePaise: balance, recentDuplicate: dup, nameExact: intent.context_kept === true || (intent.matches[0]?.score ?? 0) >= EXACT_SCORE })) return 'skip';
 
   const customer = row ?? (await app.repo.getCustomer(customerId));
   const name = customer?.name ?? '';

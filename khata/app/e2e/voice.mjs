@@ -299,10 +299,10 @@ async function main() {
     console.log('5. unknown name -> add customer -> entry');
     await home();
     await speak('mic', ['Suresh 150 kattinaan']);
-    await page.locator('.dialog').waitFor();
-    check((await text('.dialog')).includes('Suresh'), 'asks to add "Suresh"');
+    await tid('voice-new').waitFor();
+    check((await text('[data-testid="voice-new"]')).includes('Suresh'), 'asks to add "Suresh"');
     await shot('add-new-prompt-ta');
-    await page.locator('.dialog .btn-primary').click();
+    await tid('voice-pick-new').click();
     await page.locator('.screen[data-route="customer-edit"]').waitFor();
     check((await tid('cust-name').inputValue()) === 'Suresh', 'customer form prefilled with the heard name');
     await tid('cust-save').click();
@@ -757,6 +757,49 @@ async function main() {
     await tid('qs-cancel').click();
     await tid('nav-settings').click();
     check((await tid('voice-on').getAttribute('aria-pressed')) === 'true', 'Settings shows voice On again');
+    await home();
+
+    console.log('21. a different, similar name is a new customer; a picked near name is learned');
+    // The book has Ramu (two), Kamala, Kumar, Ravi, Suresh: "Rahul" is nobody's name (Ramu scores 0.6).
+    await home();
+    await say(['Rahul 500 kattinaan']);
+    await tid('mic').click();
+    await tid('voice-new').waitFor({ timeout: 5000 });
+    const newText = await text('[data-testid="voice-new"]');
+    check(newText.includes('Rahul') && (await tid('voice-pick-new').count()) === 1, `"Rahul": add-new sheet (${newText.replace(/\s+/g, ' ').slice(0, 80)})`);
+    check((await page.locator('[data-testid="voice-new"] [data-testid="voice-pick"]', { hasText: 'Ramu' }).count()) >= 1, 'Ramu offered under "Or did you mean"');
+    await shot('new-or-did-you-mean');
+    await tid('voice-pick-new').click();
+    await page.locator('.screen[data-route="customer-edit"]').waitFor();
+    check((await tid('cust-name').inputValue()) === 'Rahul', 'customer form prefilled "Rahul"');
+    await tid('cust-save').click();
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Rahul' && (await text('[data-testid="amount"]')) === '₹500', 'new customer Rahul, keypad ₹500');
+    await saveEntry();
+    await page.locator('.screen[data-route="customer"]').waitFor();
+
+    await home();
+    await say(['Raghu 30 kattinaan']);
+    await tid('mic').click();
+    await tid('voice-picker').waitFor({ timeout: 5000 });
+    check((await tid('voice-pick-new').count()) === 1, '"Raghu" (near Rahul): picker also offers Add new');
+    await page.locator('[data-testid="voice-picker"] [data-testid="voice-pick"]', { hasText: 'Rahul' }).click();
+    await page.locator('.screen[data-route="entry"]').waitFor();
+    check((await text('.topbar .sub')) === 'Rahul', 'picked Rahul for "Raghu"');
+    await page.keyboard.press('Escape');
+    await home();
+    await say(['Raghu 31 kattinaan']);
+    await tid('mic').click();
+    await tid('qs-card').waitFor({ timeout: 5000 });
+    check((await text('[data-testid="qs-card"]')).includes('Rahul'), 'next time "Raghu" is Rahul straight away (auto-save card)');
+    await tid('qs-cancel').click();
+    await tid('nav-settings').click();
+    await scrollToVoice('[data-testid="voice-aliases"]');
+    check((await text('[data-testid="voice-aliases"]')).includes('Raghu'), 'Settings lists the learned name');
+    await shot('learned-names');
+    await tid('voice-alias-forget').click();
+    await page.waitForFunction(() => !document.querySelector('[data-testid="voice-aliases"]')?.textContent?.includes('Raghu'));
+    check(true, 'Forget learned names clears it');
     await home();
 
     check(consoleErrors.length === 0, `no console errors ${consoleErrors.join(' | ')}`);

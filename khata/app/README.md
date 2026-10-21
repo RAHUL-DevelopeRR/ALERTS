@@ -270,6 +270,28 @@ The vai/sol/kel/adai verbs alone ("Ramu 100 vachirukkan") decide nothing and ope
 before 2.1.1 "vachirukkan" was fuzzy-matched to vaangirukkaan (Debit). These phrases are also sent to the recogniser
 as biasing strings after the customer names (`ENTRY_BIAS_PHRASES`, Tamil script for ta-IN). Fixtures: category
 `slang` in `test/fixtures/voice-utterances.json`; e2e: flow 20.
+### Registered vs new customers (2.1.2)
+
+`matchCustomers()` scores a spoken name against each customer's folded name (`nameKey`: Tamil and Latin spellings
+meet, and an h between vowels is a k, so Rahul = Raghul = ராகுல், Mohan = மோகன்). The distance (`nameDist`) is a
+Levenshtein where e/i and o/u swaps cost half and the short u/i Tamil puts between consonants costs a quarter
+(பிரியா = Priya, லட்சுமி = Lakshmi); any consonant change costs a full edit, and a final -a/-i (Kumar / Kumari,
+Vasanth / Vasantha) is capped at 0.75. `src/ui/voice/plan.ts` then decides:
+
+| Best score | What happens |
+|---|---|
+| ≥ 0.95 (`EXACT_SCORE`): same name, other spelling/script, or learned | keypad, or auto-save when everything else is clear |
+| ≥ 0.85 and 0.1 ahead (`STRONG_SCORE`) | keypad for that customer (never auto-save) |
+| 0.8 – 0.85, or a tie | picker, with "Add <name>" whenever the name is not exact |
+| < 0.8 (`NEW_NAME_BELOW`), or nobody | "Add a new customer?" sheet: **Add <name>** first, similar names under "Or did you mean" |
+
+So "ramu gives me 500rs credit" with only Rahul in the book (0.6) offers to add Ramu, with Rahul below. Over the 6,642
+ordered pairs of 82 common shop names in `test/voice.names.test.ts` no two different names reach 0.85.
+
+**Learned names**: picking a customer for a name that was not exact ("Raghu" -> Rahul) stores the spoken form on this
+phone (`src/ui/voice/aliases.ts`, meta `voice_aliases`, at most 300, never synced); next time it matches that customer
+at 1.0. A learned form that later becomes a real customer's name is ignored. Settings → Voice entry → "Learned names"
+lists them and can forget them all. The "Try voice" tester shows "heard “…”, NN% match" for non-exact names.
 <!-- =================== end Voice entry =================== -->
 
 <!-- =================== Verification status (v2) =================== -->

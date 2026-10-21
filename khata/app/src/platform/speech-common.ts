@@ -34,9 +34,9 @@ export function cleanAlternatives(list: readonly unknown[] | null | undefined, m
  */
 export const SPEECH_PRIVACY_NOTE: Readonly<Record<'en' | 'ta', string>> = {
   en:
-    'Voice entry sends what you say to Google\u2019s speech recognition service to turn it into text (Android: Google\u2019s speech service; browser: Chrome). It needs internet. The app does not keep the audio; only the entry you confirm is saved, after you check the customer, amount and Debit/Credit and tap Save.',
+    'Voice entry sends what you say to Google\u2019s speech recognition service to turn it into text (Android: Google\u2019s speech service; browser: Chrome). It needs internet. The app does not keep the audio; only the entry is saved: after you tap Save, or, for a clear sentence with auto-save on, when its 3-second card runs out (Cancel or Undo stop it).',
   ta:
-    'குரல் பதிவில் நீங்கள் பேசுவது உரையாக மாற்ற Google-இன் பேச்சு அறிதல் சேவைக்கு அனுப்பப்படுகிறது (ஆண்ட்ராய்டு: Google பேச்சு சேவை; பிரவுசர்: Chrome). இதற்கு இணையம் தேவை. ஆப் ஒலியைச் சேமிப்பதில்லை; வாடிக்கையாளர், தொகை, பற்று/வரவு சரிபார்த்து "சேமி" தட்டிய பிறகு அந்தப் பதிவு மட்டுமே சேமிக்கப்படும்.',
+    'குரல் பதிவில் நீங்கள் பேசுவது உரையாக மாற்ற Google-இன் பேச்சு அறிதல் சேவைக்கு அனுப்பப்படுகிறது (ஆண்ட்ராய்டு: Google பேச்சு சேவை; பிரவுசர்: Chrome). இதற்கு இணையம் தேவை. ஆப் ஒலியைச் சேமிப்பதில்லை; "சேமி" தட்டிய பிறகு, அல்லது தானாகச் சேமிப்பு இயக்கத்தில் இருந்தால் தெளிவான வாக்கியத்தின் 3 நொடி அட்டை முடிந்ததும், அந்தப் பதிவு மட்டுமே சேமிக்கப்படும் (ரத்து / செயல்தவிர் மூலம் நிறுத்தலாம்).',
 };
 
 export function speechError(code: string): Error {

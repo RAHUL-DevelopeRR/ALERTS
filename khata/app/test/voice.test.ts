@@ -4,6 +4,7 @@ import {
   type VoiceCustomer, type VoiceIntent, type VoiceSettings,
 } from '../src/core/voice';
 import { MAX_AMOUNT_PAISE } from '../src/core/ledger';
+import { NEW_NAME_BELOW } from '../src/ui/voice/plan';
 import cases from './fixtures/voice-utterances.json';
 import customerSets from './fixtures/voice-customers.json';
 
@@ -55,7 +56,8 @@ function check(got: VoiceIntent[], want: ExpectEntry[]): { name: boolean; amount
   want.forEach((w, i) => {
     const g = got[i];
     if (w.name === null) {
-      if (g.matches.length) { name = false; problems.push(`#${i} name: expected no match, got ${JSON.stringify(g.matches)}`); }
+      // a new customer: nobody, or only a different, similar name below NEW_NAME_BELOW ("Did you mean …?")
+      if ((g.matches[0]?.score ?? 0) >= NEW_NAME_BELOW) { name = false; problems.push(`#${i} name: expected a new customer, got ${JSON.stringify(g.matches)}`); }
     } else if (Array.isArray(w.name)) {
       const top = g.matches[0]?.score ?? -1;
       const tied = g.matches.filter((m) => m.score === top).map((m) => m.id).sort();

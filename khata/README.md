@@ -55,6 +55,12 @@ still open the keypad for checking. Settings → Voice entry can switch auto-sav
 வச்சிருக்கான்" (Debit), "கடனை கட்டிட்டான்", "கடனை அடைச்சிட்டான்" and "வரவு வச்சிருக்கான்" (Credit); the list is in
 `app/README.md` → "Shop slang for entries".
 
+**Registered vs new customers (2.1.2).** A spoken name that is a *different* name from everyone in the book
+("Ramu" when only Rahul, Raju or Ramesh exist) now opens "Add a new customer?" with **Add Ramu** first and the
+similar names below ("Or did you mean"); the same name in another spelling or script (Rahul / Raghul / ராகுல்)
+still finds the customer. When you pick a customer for a name the app was unsure of, the phone learns it (Settings →
+Voice entry → Learned names). Auto-save only happens when the name matches exactly or was learned.
+
 ## Optional: shop server (backup, several phones, logins, web app)
 
 Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`
