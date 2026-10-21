@@ -741,3 +741,7 @@ select.input { appearance: none; -webkit-appearance: none; }
 .seg-sm button { min-height: 44px; font-size: 16px; }
 .chips .seg { flex: 1 1 100%; margin: 4px 4px 0; }
 .set-block .seg:last-child { margin-bottom: 0; }
+
+/* Home "Speak" button (voice entry), bottom-left, opposite "+ Customer" */
+.fab.fab-mic { right: auto; left: calc(16px + var(--sal, 0px)); background: var(--gave); padding: 0 22px 0 16px; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.fab.fab-mic .ic { width: 26px; height: 26px; }

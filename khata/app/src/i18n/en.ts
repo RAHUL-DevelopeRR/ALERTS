@@ -639,6 +639,16 @@ export const en = {
   'auth.clientWeb': 'web',
   'auth.clientPhone': 'phone',
   'auth.createMinePin': 'Set an app PIN first. The PIN stops whoever holds this phone from creating a web login for the shop (it is a guard on this phone only).',
+  // ==== voice auto-save (2.1) ====
+  'voice.speak': 'Speak',
+  'voice.autoSaving': 'Saving in {n}…',
+  'voice.autoSaveNow': 'Save now',
+  'voice.autoEdit': 'Edit',
+  'voice.autoQ': 'Clear voice entries',
+  'voice.autoOn': 'Save automatically',
+  'voice.autoOnSub': 'Name, amount and an entry word heard clearly: a card shows it and saves in 3 seconds (Cancel, Edit or Undo).',
+  'voice.autoOff': 'Always open the keypad',
+  'voice.autoOffSub': 'Every voice entry opens the prefilled keypad; nothing is saved until you tap Save.',
   // ==== end accounts & web app ====
 } as const;
 

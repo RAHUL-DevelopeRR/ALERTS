@@ -148,3 +148,23 @@
 .voice-stat { background: #f4f6f5; border-radius: 10px; padding: 8px 12px; }
 .voice-stat .v { display: block; font-size: 24px; font-weight: 800; line-height: 1.2; }
 .voice-stat .l { display: block; font-size: 13px; color: var(--muted); }
+
+/* Voice auto-save card */
+.qs-card { text-align: center; }
+.qs-heard { color: var(--muted); font-size: 15px; margin-bottom: 6px; }
+.qs-who { font-size: 20px; margin-bottom: 4px; }
+.qs-kind { font-size: 18px; font-weight: 700; }
+.qs-gave .qs-kind-label, .qs-gave .qs-amount { color: var(--gave); }
+.qs-got .qs-kind-label, .qs-got .qs-amount { color: var(--got); }
+.qs-kind-sub { font-weight: 500; color: var(--muted); font-size: 15px; }
+.qs-amount { font-size: 44px; font-weight: 800; line-height: 1.2; margin: 4px 0; }
+.qs-words { font-size: 15px; }
+.qs-note { margin-top: 4px; font-size: 16px; }
+.qs-bal { margin-top: 8px; font-size: 16px; font-weight: 600; }
+.qs-countdown { margin-top: 12px; font-size: 16px; font-weight: 700; }
+.qs-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin: 8px 0 12px; }
+.qs-bar-fill { height: 100%; width: 100%; background: currentColor; transform-origin: left; animation: qs-shrink linear forwards; }
+.qs-gave .qs-bar { color: var(--gave); }
+.qs-got .qs-bar { color: var(--got); }
+@keyframes qs-shrink { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.qs-actions .btn { flex: 1 1 0; }

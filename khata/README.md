@@ -45,6 +45,12 @@ Google's recogniser the customer names as biasing strings (a small `patch-packag
 `app/patches/`), so "Ramu" is more likely to come back as Ramu than as a common word. Whether Google honours that
 biasing for Tamil is not verified: check it on the phone with a name it used to mis-hear.
 
+**Speak button and auto-save (2.1.0).** Home has a big red **Speak / பேசு** button that works even if voice was
+switched off (it switches it back on). A clear sentence with a known customer, an amount and an entry word ("Ramu 100
+kattinaan") is shown on a card and **saved by itself after 3 seconds** (Cancel, Edit or Save now on the card; Undo on
+the message after saving). Large amounts, repeats, back-dated entries, payments above the due and anything unclear
+still open the keypad for checking. Settings → Voice entry can switch auto-save off.
+
 ## Optional: shop server (backup, several phones, logins, web app)
 
 Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`

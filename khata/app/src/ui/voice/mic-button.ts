@@ -10,7 +10,7 @@ import { h } from '../components/dom';
 import { micIcon } from './icons';
 import { releaseVoice, startVoice, voiceTapped, type VoiceStartOptions } from './listen';
 import { bindPress } from './press';
-import { voicePrefs } from './prefs';
+import { saveVoicePrefs, voicePrefs } from './prefs';
 
 function bindMic(btn: HTMLButtonElement, opts: VoiceStartOptions): HTMLButtonElement {
   bindPress(btn, {
@@ -43,4 +43,32 @@ export function micHeaderButton(opts: VoiceStartOptions, testid = 'mic'): HTMLBu
     h('button', { class: 'icon-btn mic-hold', attrs: { type: 'button', 'aria-label': t('voice.mic'), title: t('voice.mic'), 'data-testid': testid } }, micIcon()),
     opts,
   );
+}
+
+/**
+ * The big "Speak" button on Home: always shown, even when voice is switched off in Settings (pressing it switches
+ * voice back on), so the mic is one press away on the main screen.
+ */
+export function micFab(opts: VoiceStartOptions, testid = 'mic'): HTMLButtonElement {
+  const btn = h(
+    'button',
+    { class: 'fab fab-mic', attrs: { type: 'button', 'aria-label': t('voice.mic'), title: t('voice.mic'), 'data-testid': testid } },
+    micIcon(),
+    h('span', { text: t('voice.speak') }),
+  );
+  bindPress(btn, {
+    holdMode: () => voicePrefs().hold,
+    onDown: () => {
+      void app.platform.hapticTap();
+      void (async () => {
+        if (!voicePrefs().on) await saveVoicePrefs({ on: true });
+        await startVoice(opts, { held: voicePrefs().hold });
+      })();
+    },
+    onUp: (kind) => {
+      if (kind === 'hold') releaseVoice();
+      else voiceTapped();
+    },
+  });
+  return btn;
 }

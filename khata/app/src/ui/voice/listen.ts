@@ -27,6 +27,7 @@ import { micIcon } from './icons';
 import { planIntent, speechErrorKey, toVoiceCustomers } from './plan';
 import { prefillFromIntent, type VoicePrefill } from './prefill';
 import { bindPress } from './press';
+import { quickSave } from './quick-save';
 import { bumpVoiceStats, loadVoicePrefs, saveVoicePrefs, voicePrefs } from './prefs';
 
 export interface VoiceStartOptions {
@@ -358,9 +359,15 @@ async function runQueue(intents: VoiceIntent[], byId: Map<string, HomeRow>, opts
     if (i + 1 < intents.length) prefill.next = () => void step(i + 1);
     const newName = intent.name_text && !intent.matches.length ? intent.name_text : null;
     switch (plan.type) {
-      case 'entry':
+      case 'entry': {
+        // A single clear entry is saved from a small card after a countdown; anything else opens the keypad.
+        if (intents.length === 1 && !opts.quick) {
+          const r = await quickSave(intent, plan.customerId, byId.get(plan.customerId));
+          if (r === 'saved' || r === 'cancel') return;
+        }
         await openEntry(plan.customerId, prefill);
         return;
+      }
       case 'pick': {
         const id = await pickCustomer({ heard: intent.heard, candidates: plan.candidates, byId, newName });
         if (id === null) return;

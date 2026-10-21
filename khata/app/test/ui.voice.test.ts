@@ -94,7 +94,8 @@ describe('prefillFromIntent', () => {
 describe('prefs and stats parsing', () => {
   it('defaults, field-by-field validation, junk tolerated', () => {
     expect(parseVoicePrefs(null)).toEqual(DEFAULT_VOICE_PREFS);
-    expect(parseVoicePrefs('{"on":false,"lang":"en-IN","bare":"GIVE","notice_ok":true}')).toEqual({ on: false, lang: 'en-IN', bare: 'GIVE', notice_ok: true, hold: true });
+    expect(parseVoicePrefs('{"on":false,"lang":"en-IN","bare":"GIVE","notice_ok":true}')).toEqual({ on: false, lang: 'en-IN', bare: 'GIVE', notice_ok: true, hold: true, autosave: true });
+    expect(parseVoicePrefs('{"autosave":false}')).toEqual({ ...DEFAULT_VOICE_PREFS, autosave: false });
     expect(parseVoicePrefs('{"hold":false}')).toEqual({ ...DEFAULT_VOICE_PREFS, hold: false });
     expect(parseVoicePrefs('{"hold":"no"}').hold).toBe(true);
     expect(parseVoicePrefs('{"on":"no","lang":"fr-FR","bare":"X"}')).toEqual(DEFAULT_VOICE_PREFS);

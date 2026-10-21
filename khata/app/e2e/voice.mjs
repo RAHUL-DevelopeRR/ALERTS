@@ -192,7 +192,7 @@ async function main() {
     await tid('pin-skip').click();
     await tid('onb-start').click();
     await page.locator('.screen[data-route="home"]').waitFor();
-    check((await tid('mic').count()) === 0, 'empty ledger: no search row, so no mic yet');
+    check((await tid('mic').count()) === 1, 'empty ledger: the Speak button is already on Home');
     await addCustomer('Ramu', { phone: '98765 00001', note: 'கோயில் தெரு', credit: '250' });
     check((await text('[data-testid="balance"]')) === '₹250', 'Ramu owes ₹250');
     check((await text('[data-testid="hero"]')).includes('கோயில் தெரு'), 'Ramu was created with the note (the picker later tells the two Ramus apart by it)');
@@ -200,8 +200,13 @@ async function main() {
     await addCustomer('Kumar');
     await addCustomer('Ravi');
     await home();
-    check((await tid('mic').count()) === 1, 'home: mic beside the search box');
+    check((await tid('mic').count()) === 1, 'home: Speak button');
     await shot('home-mic-ta');
+    // Flows 1-19 check the prefilled keypad; auto-save has its own flow (20) at the end.
+    await tid('nav-settings').click();
+    await tid('voice-auto-off').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-auto-off"]')?.getAttribute('aria-pressed') === 'true');
+    await home();
 
     console.log('1. "Ramu 100 kuduthaachu" -> Ramu, Credit ₹100, Save -> balance 150');
     await say(['Ramu 100 kuduthaachu']);
@@ -450,13 +455,13 @@ async function main() {
     await page.keyboard.press('Escape');
     await page.locator('.screen[data-route="customer"]').waitFor();
 
-    console.log('12. Voice off hides the mics');
+    console.log('12. Voice off hides the customer mic; the Home Speak button stays');
     await home();
     await tid('nav-settings').click();
     await tid('voice-off').click();
     await page.waitForFunction(() => document.querySelector('[data-testid="voice-off"]')?.getAttribute('aria-pressed') === 'true');
     await home();
-    check((await tid('mic').count()) === 0, 'home mic hidden when voice is off');
+    check((await tid('mic').count()) === 1, 'home Speak button stays when voice is off');
     await openCustomer('Kamala');
     check((await tid('mic-customer').count()) === 0, 'customer mic hidden when voice is off');
     await home();
@@ -686,6 +691,63 @@ async function main() {
     await tid('nav-settings').click();
     await tid('voice-hold-on').click();
     await page.waitForFunction(() => document.querySelector('[data-testid="voice-hold-on"]')?.getAttribute('aria-pressed') === 'true');
+
+    console.log('20. auto-save: a clear entry saves itself after the countdown; Undo, Cancel, Speak turns voice on');
+    await tid('voice-auto-on').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-auto-on"]')?.getAttribute('aria-pressed') === 'true');
+    await openCustomer('Kumar');
+    const kumarBefore = await text('[data-testid="balance"]');
+    await home();
+    await say(['Kumar 40 kattinaan']);
+    await tid('mic').click();
+    await tid('qs-card').waitFor({ timeout: 5000 });
+    check((await text('[data-testid="qs-amount"]')) === '₹40', 'auto-save card: ₹40');
+    check((await text('[data-testid="qs-kind"]')).length > 0, `auto-save card: kind ${await text('[data-testid="qs-kind"]')}`);
+    await shot('auto-save-card');
+    await page.locator('.screen[data-route="customer"]').waitFor({ timeout: 6000 });
+    check((await tid('qs-card').count()) === 0, 'card gone after the countdown');
+    const msg = await toast();
+    check(msg.includes('Kumar') && msg.includes('₹40'), `saved toast: ${msg}`);
+    const kumarAfter = await text('[data-testid="balance"]');
+    check(kumarAfter !== kumarBefore, `Kumar balance changed ${kumarBefore} -> ${kumarAfter}`);
+    await shot('auto-saved', { keepToast: true });
+    await page.locator('.toast button').first().click();
+    await page.waitForFunction((b) => document.querySelector('[data-testid="balance"]')?.textContent?.trim() === b, kumarBefore, { timeout: 5000 });
+    check(true, `Undo restored Kumar to ${kumarBefore}`);
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+
+    await home();
+    await say(['Kumar 45 kattinaan']);
+    await tid('mic').click();
+    await tid('qs-card').waitFor({ timeout: 5000 });
+    await tid('qs-cancel').click();
+    await page.waitForTimeout(3800);
+    check((await page.locator('.screen[data-route="home"]').count()) === 1 && (await tid('qs-card').count()) === 0, 'Cancel: card closed, still on Home');
+    await openCustomer('Kumar');
+    check((await text('[data-testid="balance"]')) === kumarBefore, 'Cancel saved nothing');
+
+    await home();
+    await say(['Kumar 47 kattinaan']);
+    await tid('mic').click();
+    await tid('qs-card').waitFor({ timeout: 5000 });
+    await tid('qs-edit').click();
+    await page.locator('.screen[data-route="entry"]').waitFor({ timeout: 5000 });
+    check((await text('[data-testid="amount"]')) === '₹47', 'Edit: prefilled keypad with ₹47');
+    await page.keyboard.press('Escape');
+    await home();
+
+    await tid('nav-settings').click();
+    await tid('voice-off').click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="voice-off"]')?.getAttribute('aria-pressed') === 'true');
+    await home();
+    await say(['Ravi 23 kattinaan']);
+    await tid('mic').click();
+    await tid('qs-card').waitFor({ timeout: 5000 });
+    check(true, 'Speak with voice off: switched voice on and listened');
+    await tid('qs-cancel').click();
+    await tid('nav-settings').click();
+    check((await tid('voice-on').getAttribute('aria-pressed')) === 'true', 'Settings shows voice On again');
+    await home();
 
     check(consoleErrors.length === 0, `no console errors ${consoleErrors.join(' | ')}`);
   } catch (e) {

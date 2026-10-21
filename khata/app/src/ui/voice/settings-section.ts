@@ -68,6 +68,21 @@ function bareChoice(p: VoicePrefs): HTMLElement[] {
   ];
 }
 
+function autoChoice(p: VoicePrefs): HTMLElement[] {
+  const pick = (autosave: boolean): void => {
+    if (autosave === p.autosave) return;
+    void saveVoicePrefs({ autosave }).then(() => router.rerender(), (e) => toast(errorText(e), { error: true }));
+  };
+  const choice = (on: boolean, label: string, sub: string): HTMLElement =>
+    h(
+      'button',
+      { class: `voice-choice${p.autosave === on ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': p.autosave === on ? 'true' : 'false', 'data-testid': on ? 'voice-auto-on' : 'voice-auto-off' }, on: { click: () => pick(on) } },
+      h('span', { text: label }),
+      h('span', { class: 'sub', text: sub }),
+    );
+  return [choice(true, t('voice.autoOn'), t('voice.autoOnSub')), choice(false, t('voice.autoOff'), t('voice.autoOffSub'))];
+}
+
 function holdChoice(p: VoicePrefs): HTMLElement[] {
   const pick = (hold: boolean): void => {
     if (hold === p.hold) return;
@@ -204,6 +219,7 @@ export async function voiceSettingsSection(): Promise<HTMLElement> {
         ? [
             block(h('span', { class: 'field-label', text: t('voice.lang') }), langSeg(p)),
             block(h('span', { class: 'field-label', text: t('voice.holdQ') }), holdChoice(p)),
+            block(h('span', { class: 'field-label', text: t('voice.autoQ') }), autoChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.bareQ') }), bareChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.try') }), tryBlock(p)),
             block(statsBlock(st)),

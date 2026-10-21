@@ -235,6 +235,23 @@ entries) and put it into `RecognizerIntent.EXTRA_BIASING_STRINGS` (API 33+) in `
 the continuous-PTT restart path; below Android 13 nothing is sent. The patch adds no permission (check the merged
 manifest after `assembleDebug`). **Whether Google's recogniser honours the biasing for `ta-IN` is unverified: it has to
 be checked on the phone** (say a customer name that Google used to mis-hear, with and without the names in the list).
+### Speak button and auto-save (2.1.0)
+
+**Speak button.** Home always shows a big red "Speak / பேசு" button at the bottom left (`micFab()` in
+`src/ui/voice/mic-button.ts`), even on an empty ledger and even when voice entry is switched off: pressing it turns
+voice entry back on (`saveVoicePrefs({on:true})`) and starts listening, hold or tap as configured. The customer page
+keeps its small header mic, which is still hidden when voice is off.
+
+**Auto-save** (Settings → Voice entry → "Clear voice entries" → "Save automatically", default on; `src/ui/voice/quick-save.ts`).
+When one utterance names a known customer, an undisputed amount and an entry word ("Ramu 100 kattinaan", "Ramukku 250
+kuduthen", "Ramu debit 300") the app shows a card with what it heard, the customer, Debit/Credit, the amount in figures
+and words and the balance before → after, counts down `AUTO_SAVE_SECONDS` (3 s) and saves the entry. Cancel discards
+it, Edit opens the usual prefilled keypad, Save now skips the wait, and the toast after saving offers Undo (a
+reversal). `autoSaveEligible()` only allows the safe case: parser confidence `high`, today's date, no alternative
+amount, below the "confirm above" amount, not a repeat of the same customer/kind/amount saved on this phone in the
+last minute, and not a payment larger than the due. Anything else (several entries in one breath, two Ramus, a new
+name, a missing direction, back-dated) goes to the keypad as before. Unit tests: `test/ui.quick-save.test.ts`; e2e:
+`e2e/voice.mjs` flow 20 (screenshots `voice-*-auto-save-card.png`, `voice-*-auto-saved.png`).
 <!-- =================== end Voice entry =================== -->
 
 <!-- =================== Verification status (v2) =================== -->

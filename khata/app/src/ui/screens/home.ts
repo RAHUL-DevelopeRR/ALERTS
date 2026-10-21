@@ -12,7 +12,7 @@ import { money, toneClass } from '../format';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { saveBackupCopy } from '../backup';
-import { micButton } from '../voice/mic-button';
+import { micFab } from '../voice/mic-button';
 import { loadVoicePrefs } from '../voice/prefs';
 
 type Sort = 'recent' | 'due' | 'oldest';
@@ -140,7 +140,7 @@ export const homeScreen: Screen = async (root, route) => {
     onEnter: () => void app.platform.hideKeyboard(),
   });
   // Voice entry (v2): the mic sits beside the search box; null when switched off in Settings → Voice.
-  const searchRow = h('div', 'search-row', search.el, micButton({}));
+  const searchRow = h('div', 'search-row', search.el);
   // Sort chips wrap onto a second line instead of scrolling off-screen; the due list is a separate, clearly
   // different action (a filter with its own sheet), not a fourth sort.
   const chipRow = h('div', 'chips');
@@ -281,7 +281,7 @@ export const homeScreen: Screen = async (root, route) => {
     icon('plus'),
     h('span', { text: t('home.addCustomer') }),
   );
-  root.append(fab);
+  root.append(micFab({}), fab);
   root.appendChild(bar);
   return () => pill.dispose();
 };
