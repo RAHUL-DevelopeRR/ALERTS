@@ -186,6 +186,7 @@ async function main() {
     await page.goto(server.url);
     await tid('onb-ta').waitFor();
     await tid('onb-ta').click();
+    await tid('onb-new').click();
     await tid('onb-shop').fill('ஸ்ரீ முருகன் ஸ்டோர்ஸ்');
     await tid('onb-next').click();
     await tid('pin-skip').waitFor();

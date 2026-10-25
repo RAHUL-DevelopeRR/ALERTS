@@ -4,7 +4,8 @@ Offline-first udhaar / khata ledger for one grocery shop: customers buy on credi
 repay (**Credit** / வரவு, payment received), and the shopkeeper can show or WhatsApp the outstanding balance at any
 time. Tamil and English. The phone is the ledger of record; an optional Cloudflare Worker keeps a server copy, joins
 several phones, and (v2) serves a web app for the owner. v2 adds **voice entry** ("Ramu 100 kattinaan" → a prefilled
-entry the shopkeeper checks and saves) and **user id + password logins**.
+entry the shopkeeper checks and saves) and **user id + password logins**; 2.3 adds **fast sync** for several counter
+phones on one ledger (an entry saved at one counter shows on the others within about 20 seconds).
 
 Everything runs on free tiers: Workers Free (Worker + D1 + static assets), Google's speech service on the phone and
 Chrome's Web Speech API in the browser, Google Identity Services for the optional Google sign-in. No paid API anywhere.
@@ -24,8 +25,10 @@ Chrome's Web Speech API in the browser, Google Identity Services for the optiona
 - **Or over USB** from a computer with `adb`: `./tools/install-on-phone.sh kadan-kanakku-1.0.0.apk`
   (Redmi/Xiaomi: enable Developer options → "USB debugging" and "Install via USB").
 
-First launch asks for the language, the shop name (and optional UPI ID) and an optional PIN. No server, account or
-internet is needed. Then Settings → About → **Run self-test** should show every line as `ok`.
+First launch asks for the language, then **Start a new shop** (the shop name, optional UPI ID and an optional PIN; no
+server, account or internet needed) or **Sign in to my shop** (a phone joining a shop that already has a server: the
+user id and password the owner made for this person). Then Settings → About → **Run self-test** should show every
+line as `ok`.
 
 ## Voice entry (v2)
 
@@ -74,11 +77,13 @@ mode".
 Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`
 after `cd khata/api && npm ci && npx wrangler login`; it applies the D1 migrations, builds and uploads the web app
 with the Worker, and prints the server address, the setup key and the web app URL; details in `api/README.md`.
-Then on the owner's phone: Settings → Server copy → First-time setup (server address + setup key). Add more phones
-from Settings → Devices → Add a phone. Print the recovery codes and keep them in the cash box.
+Then on the owner's phone: Settings → Server copy → First-time setup (server address, setup key, and the owner's own
+user id and password, which this step creates). Print the recovery codes (Settings → Devices) and keep them in the
+cash box. Other phones: see "Several counters, one ledger" below.
 
-**Logins (v2).** From a paired owner phone, Settings → Account → "Create a login for me" makes the owner's user id
-and password; owner "Users" adds staff and other owners (user id, password, role; optional Gmail). A phone can then
+**Logins (v2).** First-time setup makes the owner's user id and password (a phone paired with a code instead uses
+Settings → Account → "Create a login for me"); owner "Users" adds staff and other owners (user id, password, role;
+optional Gmail). A phone can then
 sign in with user id + password instead of a pairing code, and the owner can open the **web app** at the server
 address (`https://<name>.workers.dev/`) in Chrome: the same ledger, synced, with Online copy / shared-computer modes.
 Staff cannot use the web app. Owner-power actions (new users, pairing codes, recovery codes, revoking a phone, the
@@ -90,17 +95,45 @@ Cloud project with the Worker's address as an authorised JavaScript origin, put 
 `api/wrangler.jsonc` → `GOOGLE_CLIENT_IDS`, deploy, then set each person's Gmail address on their user from the
 owner phone; they sign in with Google within 48 h to link it. Step by step: `api/README.md` → "Google sign-in".
 
+## Several counters, one ledger (fast sync, 2.3.0)
+
+One shop, two or more phones (different SIMs, Wi-Fi or mobile data: it does not matter), one ledger on the shop's
+server. Every phone keeps the full ledger and works offline; the server puts everyone's entries in one order.
+
+1. Owner: deploy the server and do First-time setup (above). Settings → **Users** → add each employee (user id,
+   name, password; role Staff).
+2. Build the APK with the server address inside, so nobody types it:
+   `SHOP_SERVER_URL=https://<name>.workers.dev KEYSTORE_PROPERTIES=… ./khata/tools/build-release-apk.sh`.
+3. Each counter phone: install, pick the language, **Sign in to my shop**, type the user id and password, give the
+   phone a name ("Counter 2"). The shop's customers and balances come down; done.
+
+How fast: a save goes to the server 2 seconds later. While the app is open and in use, each phone asks for the
+other phones' entries every 20 seconds, so an entry saved at counter 1 shows on counter 2 within about 20 seconds
+without touching it (19–20 s measured in the two-phone test). Opening a customer's page fetches at once, so the
+balance told to a customer includes what the other counter just saved. A phone nobody has touched for 5 minutes
+checks once a minute instead, and the first touch fetches at once. The screen redraws by itself only when that is
+safe: never while someone is typing or a dialog is open. No network: entries are saved on the phone, the pill says
+"Offline · 1 waiting", and they go out when the network is back. The language is each phone's own choice. Cost:
+still ₹0 (a busy phone makes about 4,000 small requests a day; Workers Free allows 100,000 for the shop).
+
+If someone does not know what to do: after the language, a new install asks only "Sign in to my shop" or "Start a
+new shop", and a counter phone always takes the first; the owner gives each person their user id and password. A
+phone that was set up wrong can be signed out (Settings → Account) and signed in again; nothing on the server is
+lost.
+
 ## Updates
 
 Every update must be signed with the same release key (`app/README.md` → "Signing a release") and keep the same
 application id `live.zerox.kadankanakku`; bump `versionCode` and `versionName` in `app/android/app/build.gradle`.
 Installing an update keeps all data on the phone.
 
-## Verification status (v2.0.0)
+## Verification status (v2.3.0)
 
 - App: `tsc` clean; vitest green (unit, voice-parser fixtures with per-category accuracy, reviewer suites for the
-  ledger, sync, native, speech platform, voice and the web/accounts client); three Chromium e2e harnesses
-  (`e2e/flows.mjs`, `e2e/voice.mjs`, `e2e/web-login.mjs`) pass; debug APK builds with the expected permission list.
+  ledger, sync, native, speech platform, voice and the web/accounts client); five Chromium e2e harnesses
+  (`e2e/flows.mjs`, `e2e/voice.mjs`, `e2e/voice-mode.mjs`, `e2e/web-login.mjs`, and `e2e/multi-device.mjs`: an owner
+  phone and a counter phone against a local Cloudflare server, signing in, entries both ways, offline catch-up)
+  pass; debug APK builds with the expected permission list.
 - Server: vitest green in the Workers runtime (sync, accounts, hardening, Google, CPU budget, the second-pass security
   review's regression tests); `wrangler deploy --dry-run` succeeds; the two-engine sync integration test passes
   against `wrangler dev --local`.
@@ -109,7 +142,7 @@ Installing an update keeps all data on the phone.
   shared sessions never rebuild the ledger into the browser's IndexedDB, Google nonce refresh after a failed sign-in,
   `hd` claim for Workspace addresses, PIN before "Create a login for me").
 - **Not yet run on a physical phone.** Google's Tamil speech results, the Android SQLite plugin, Tamil keyboards,
-  WhatsApp sharing, Android password login and the step-up dialog were verified from source, Node and headless
-  Chromium only. Google sign-in was exercised against a fake, not against real Google Identity Services. Check
+  WhatsApp sharing, Android password login, the step-up dialog and fast sync over mobile data were verified from
+  source, Node and headless Chromium only. Google sign-in was exercised against a fake, not against real Google Identity Services. Check
   Settings → About → **Run self-test** and a few spoken entries on the real device before relying on it, and keep the
   paper book for the first weeks.

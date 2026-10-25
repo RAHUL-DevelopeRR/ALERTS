@@ -23,6 +23,8 @@ export const customerScreen: Screen = async (root, route) => {
   const s = await refreshSettings();
   const [c, rows] = await Promise.all([app.repo.getCustomer(id), app.repo.listEntries(id), loadVoicePrefs()]);
   if (!c) throw new Error('NOT_FOUND');
+  // The balance a customer is told must include the other counters' entries: sync now unless it just ran.
+  app.sync.refreshIfStale();
   const balance = rows.length ? rows[rows.length - 1].running_paise : 0;
   const owner = s.role === 'owner';
 

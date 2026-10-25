@@ -25,6 +25,7 @@ import { stepUpDialog } from './ui/screens/login';
 import { settingsScreen } from './ui/screens/settings';
 import { statementScreen } from './ui/screens/statement';
 import { voiceModeScreen } from './ui/screens/voice-mode';
+import { startLiveRefresh } from './ui/live';
 import { APP_VERSION } from './ui/version';
 import { webPrelude } from './ui/web/boot';
 import { isWebApp } from './ui/web/flag';
@@ -125,6 +126,8 @@ async function boot(): Promise<void> {
     }
     // Owner-power calls (new user, pairing code, revoke...) ask for the owner's password or a recovery code.
     app.sync.setStepUpProvider(stepUpDialog);
+    // Other phones' entries redraw the open list screen (fast sync, ui/live.ts).
+    startLiveRefresh();
   } catch (e) {
     showBootError(e, stage);
     return;

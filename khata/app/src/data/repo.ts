@@ -1252,7 +1252,8 @@ export class SqlRepo implements Repo {
         await metaSet(tx, 'shop_id', page.shop.id);
         await metaSet(tx, 'shop_name', page.shop.name);
         await metaSet(tx, 'upi_id', page.shop.upi_id);
-        await metaSet(tx, 'lang', page.shop.lang === 'en' ? 'en' : 'ta');
+        // Not 'lang': the language is each phone's own choice (staff may read Tamil on one phone and English on
+        // another), and with a pull every 20 s a shop-wide language would keep switching a phone back.
       }
       await metaSet(tx, 'cursor', String(page.next_since));
     });
@@ -1384,7 +1385,7 @@ export class SqlRepo implements Repo {
       await metaSet(tx, 'shop_id', p.shop.id);
       await metaSet(tx, 'shop_name', p.shop.name);
       await metaSet(tx, 'upi_id', p.shop.upi_id);
-      await metaSet(tx, 'lang', p.shop.lang === 'en' ? 'en' : 'ta');
+      // The language chosen on this phone (first run, Settings) stays: it is per phone, not per shop.
       await metaSet(tx, 'sync_epoch', p.sync_epoch);
       await metaSet(tx, 'cursor', '0');
       await metaSet(tx, 'last_pairing', null);

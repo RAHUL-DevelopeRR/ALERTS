@@ -112,6 +112,7 @@ let earlyTimer: ReturnType<typeof setTimeout> | null = null;
 let idleTimer: ReturnType<typeof setInterval> | null = null;
 let resumeTimer: ReturnType<typeof setInterval> | null = null;
 let appStateOff: (() => void) | null = null;
+let remoteOff: (() => void) | null = null;
 /** A Pause the shopkeeper set before Edit is put back when the keypad returns. */
 let pauseBeforeEdit: PauseReason | null = null;
 
@@ -170,6 +171,12 @@ export async function startMode(): Promise<void> {
   set({});
   void app.platform.keepAwake?.(true);
   appStateOff = app.platform.onAppStateChange((on) => (on ? onForeground() : pauseMode('background')));
+  // Another counter's entries arrived (fast sync): new balances on the waiting card and for the next sentence.
+  remoteOff = app.sync.onRemoteChange(() => {
+    void refreshCustomers().then(() => {
+      if (state.active) set({ card: state.card ? { ...state.card } : null });
+    });
+  });
   idleTimer = setInterval(checkIdle, 5000);
   listenNext(0);
 }
@@ -184,6 +191,8 @@ export function stopMode(): { n: number; gave: number; got: number } {
   idleTimer = null;
   appStateOff?.();
   appStateOff = null;
+  remoteOff?.();
+  remoteOff = null;
   queue = [];
   void app.platform.speech.stop();
   void app.platform.keepAwake?.(false);
@@ -367,6 +376,8 @@ function showCard(intent: VoiceIntent): void {
   };
   set({ card, live: '' });
   void app.platform.hapticTap();
+  // The card shows "Due before -> after": make sure the other counters' latest entries are in.
+  app.sync.refreshIfStale();
 }
 
 /** The card is done (approved, skipped, saved from the keypad): the next one of the sentence, or listen again. */

@@ -101,6 +101,18 @@ curl -s -X POST https://kadan-kanakku-api.<subdomain>.workers.dev/v1/setup \
 
 Then, from the owner's phone: Settings, Devices, "Recovery codes" (print them and keep them in the cash box).
 
+**Several counters (2.3.0).** First-time setup on the owner's phone (server address + setup key) now also asks for
+the owner's user id and password and creates that login in the same step. The owner adds a user for each employee
+(Settings → Users). Build the APK with the server address inside
+(`SHOP_SERVER_URL=https://… ./khata/tools/build-release-apk.sh`): the other phones then choose **Sign in to my shop**
+on first launch and type only their user id and password. Pairing codes still work as a fallback.
+
+**Fast sync load.** A phone pushes a save 2 s after it is made and, while the app is open and in use, asks
+`GET /v1/sync/pull` for other phones' rows every 20 s (every minute after 5 minutes with no touch, no save and
+nothing new). An empty pull is three indexed reads in one batch plus the auth middleware's device-row update. A busy
+counter phone left open day and night makes about 4,000 requests (4,000 D1 row writes for the device row), so three
+phones stay around 12,000 of the 100,000 requests and 100,000 row writes Workers Free gives per day.
+
 Notes:
 
 - `PEPPER` is mixed into every stored token and code hash. Without it every route except `/v1/health` answers
@@ -108,7 +120,8 @@ Notes:
 - `SETUP_KEY` enables `POST /v1/setup` (bootstrap and last-resort recovery: it reuses the existing shop and mints
   a new owner code). Without the secret the route answers 404. To disable it after handover:
   `npx wrangler secret delete SETUP_KEY`.
-- Vars in `wrangler.jsonc`: `DAILY_REQUEST_CAP` (per device per UTC day, default 5000), `PAIR_THROTTLE_AFTER`
+- Vars in `wrangler.jsonc`: `DAILY_REQUEST_CAP` (per device per UTC day, default 10000; with fast sync a busy
+  counter phone left open day and night makes about 4,000 at most), `PAIR_THROTTLE_AFTER`
   (wrong `/pair` guesses per UTC day before throttling, default 20), `AUTH_THROTTLE_AFTER` (wrong password logins
   from unknown sources per UTC day, default 100), `GOOGLE_CLIENT_IDS` (web OAuth client ids; empty = Google sign-in
   off on the web), `GOOGLE_ANDROID_CLIENT_IDS` (Android client ids; empty = Android Google logins answer 404) and

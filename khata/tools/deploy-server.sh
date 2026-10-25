@@ -147,12 +147,14 @@ $(printf '\033[32mServer is live.\033[0m')
   Web app        : $URL/          (owner sign-in with user id & password; staff use the phone app)
   Setup key      : ${SETUP_KEY:-<already set on the server; run with --rotate-setup-key to issue a new one>}
 
-On the OWNER's phone:  Settings → Server copy → "First-time setup"
-  enter the server address, the setup key and the shop name, then tap Connect.
-Then:  Settings → Devices → "Recovery codes" → write them down and keep them in the cash box.
-Then:  Settings → Users → "Create a login for me" (user id + password) so the owner can sign in on the web at $URL/.
-Other phones:  owner phone → Devices → "Add a phone" → type that 8-digit code on the other phone,
-               or Users → "Add user" and sign in on the other phone with that user id & password.
+On the OWNER's phone:  Settings → Shop server → Connect to shop server → "First-time setup"
+  enter the server address, the setup key, the shop name and your own user id + password, then tap Connect.
+Then:  Settings → Phones → "Recovery codes" → write them down and keep them in the cash box.
+Staff:  Settings → Users → "Add user" gives each person a user id and password.
+An APK with this server built in (staff then type only their user id and password):
+  SHOP_SERVER_URL=$URL KEYSTORE_PROPERTIES=... ./khata/tools/build-release-apk.sh
+Every other phone:  install that APK → "Sign in to my shop" → user id + password.
+The owner's web app:  $URL/  (owner sign-in; staff use the phone app).
 
 Keep $SECRETS (PEPPER, SETUP_KEY) backed up with the APK signing key. Never commit it.
 After handover you can disable first-time setup:  cd khata/api && npx wrangler secret delete SETUP_KEY

@@ -2,8 +2,9 @@
  * Sync entry point. The app creates the engine once at startup:
  *
  *   const engine = createSyncEngine(repo, platform());
- *   engine.start();               // triggers: now, foreground, network regained, 30 s after writes, every 15 min
+ *   engine.start();               // triggers: now, foreground, network regained, 2 s after writes, every 20 s open
  *   // after every local write:  engine.notifyLocalWrite();
+ *   // on a touch / key press:    engine.notifyActivity();   (idle phones poll once a minute)
  *
  * `syncEngine()` returns the engine created last (for modules that cannot receive it by argument).
  */
@@ -25,6 +26,9 @@ export {
   BACKOFF_MS,
   DEBOUNCE_MS,
   INTERVAL_MS,
+  IDLE_INTERVAL_MS,
+  IDLE_AFTER_MS,
+  FRESH_MS,
   CODES_LOW_WATER,
   CLOCK_SKEW_LIMIT_MS,
   type SyncEngineOptions,

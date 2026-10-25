@@ -134,6 +134,9 @@ async function main() {
     await tid('onb-ta').waitFor();
     await shot('onboarding-language');
     await tid('onb-ta').click();
+    await tid('onb-new').waitFor();
+    await shot('onboarding-use');
+    await tid('onb-new').click();
     await tid('onb-shop').fill('ஸ்ரீ முருகன் ஸ்டோர்ஸ்');
     await tid('onb-upi').fill('murugan@okaxis');
     await shot('onboarding-shop-ta');

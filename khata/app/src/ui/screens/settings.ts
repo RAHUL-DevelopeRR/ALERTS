@@ -20,6 +20,8 @@ import { askNewPin } from '../gate';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { APP_VERSION } from '../version';
+import { BUILT_IN_SERVER } from '../shop-server';
+import { checkNewPassword, normalizeUsername } from '../../sync/password';
 import { voiceSettingsSection } from '../voice/settings-section';
 
 const LOCK_CHOICES = [2, 10, 30];
@@ -82,10 +84,7 @@ function langSection(s: Settings): HTMLElement {
     await app.repo.saveSettings({ lang });
     setLang(lang);
     await refreshSettings();
-    if (s.paired && s.role === 'owner') {
-      // The shop language is shared by all phones; the next pull would otherwise switch it back.
-      app.sync.updateShop({ lang }).catch((e) => toast(errorText(e), { error: true }));
-    }
+    // The language is this phone's own: other phones keep theirs (sync never changes it).
     void router.rerender();
   };
   return section(
@@ -224,13 +223,14 @@ function backupSection(s: Settings): HTMLElement {
 // ------------------------------------------------------------------ shop server
 
 function connectForm(s: Settings): HTMLElement {
-  let mode: 'code' | 'login' | 'setup' = 'code';
+  // User id + password is the usual way into the shop; a code is the fallback; first-time setup is the owner's once.
+  let mode: 'code' | 'login' | 'setup' = 'login';
   const url = h('input', { class: 'input', attrs: { type: 'url', inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: t('set.serverUrlPh'), 'data-testid': 'srv-url' } });
-  const devName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 60, autocomplete: 'off' } });
+  const devName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 60, autocomplete: 'off', 'data-testid': 'srv-device' } });
   const code = h('input', { class: 'input', attrs: { type: 'text', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'data-testid': 'srv-code' } });
-  const key = h('input', { class: 'input', attrs: { type: 'password', autocomplete: 'off' } });
-  const shopName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 100 } });
-  url.value = s.server_url ?? '';
+  const key = h('input', { class: 'input', attrs: { type: 'password', autocomplete: 'off', 'data-testid': 'srv-key' } });
+  const shopName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 100, 'data-testid': 'srv-shop' } });
+  url.value = s.server_url ?? BUILT_IN_SERVER;
   shopName.value = s.shop_name;
   devName.value = s.device_name ?? '';
   if (!devName.value) void app.platform.deviceModel().then((m) => { if (!devName.value) devName.value = m; }).catch(() => undefined);
@@ -243,13 +243,20 @@ function connectForm(s: Settings): HTMLElement {
   const pw = passwordField({ label: t('auth.password'), testid: 'srv-pw', autocomplete: 'current-password' });
   user.wrap.classList.add('hidden');
   pw.wrap.classList.add('hidden');
+  // First-time setup also makes the owner's own login for the new shop (allowed without step-up while the shop has
+  // no users), so the owner signs in on the web and on a new phone with it from day one.
+  const ownUser = usernameField('srv-own-user');
+  const ownPw = passwordField({ label: t('auth.newPassword'), testid: 'srv-own-pw', autocomplete: 'new-password' });
+  const ownPw2 = passwordField({ label: t('auth.newPassword2'), testid: 'srv-own-pw2', autocomplete: 'new-password' });
+  const ownHelp = h('p', { class: 'input-help', text: t('set.setupLoginHelp') });
+  const ownBlock = h('div', { class: 'hidden', attrs: { 'data-testid': 'srv-own' } }, ownHelp, ownUser.wrap, ownPw.wrap, ownPw2.wrap);
   const seg = h('div', { class: 'seg', attrs: { 'data-testid': 'srv-mode' } });
   const label = (): string => (mode === 'login' ? t('auth.signInBtn') : t('set.pairBtn'));
   const paintSeg = (): void => {
     clear(seg);
     seg.append(
-      h('button', { class: mode === 'code' ? 'on' : '', attrs: { type: 'button', 'data-testid': 'srv-mode-code' }, text: t('set.pairWithCode'), on: { click: () => { mode = 'code'; paintSeg(); } } }),
       h('button', { class: mode === 'login' ? 'on' : '', attrs: { type: 'button', 'data-testid': 'srv-mode-login' }, text: t('auth.signInShort'), on: { click: () => { mode = 'login'; paintSeg(); } } }),
+      h('button', { class: mode === 'code' ? 'on' : '', attrs: { type: 'button', 'data-testid': 'srv-mode-code' }, text: t('set.pairWithCode'), on: { click: () => { mode = 'code'; paintSeg(); } } }),
       h('button', { class: mode === 'setup' ? 'on' : '', attrs: { type: 'button', 'data-testid': 'srv-mode-setup' }, text: t('set.firstSetup'), on: { click: () => { mode = 'setup'; paintSeg(); } } }),
     );
     codeField.classList.toggle('hidden', mode !== 'code');
@@ -257,6 +264,7 @@ function connectForm(s: Settings): HTMLElement {
     shopField.classList.toggle('hidden', mode !== 'setup');
     user.wrap.classList.toggle('hidden', mode !== 'login');
     pw.wrap.classList.toggle('hidden', mode !== 'login');
+    ownBlock.classList.toggle('hidden', mode !== 'setup');
     go.textContent = label();
   };
   const go = button(t('set.pairBtn'), () => {
@@ -270,9 +278,25 @@ function connectForm(s: Settings): HTMLElement {
         else if (mode === 'login') {
           await app.sync.login(url.value.trim(), user.input.value, pw.input.value, dn, { onProgress: (p) => { go.textContent = p === 'deriving' ? t('auth.stepDerive') : t('auth.stepLogin'); } });
           pw.input.value = '';
-        } else await app.sync.setupAndPair(url.value.trim(), key.value, shopName.value.trim(), dn);
+        } else {
+          // Check the owner's new login before anything is created, so a typo cannot leave a shop without one.
+          const username = normalizeUsername(ownUser.input.value);
+          checkNewPassword(ownPw.input.value);
+          if (ownPw.input.value !== ownPw2.input.value) throw new Error(t('auth.pwMismatch'));
+          await app.sync.setupAndPair(url.value.trim(), key.value, shopName.value.trim(), dn);
+          try {
+            go.textContent = t('auth.stepDerive');
+            const u = await app.sync.createUser({ username, display_name: username, role: 'owner', password: ownPw.input.value, link_me: true });
+            toast(t('auth.userCreated', { user: u.username }));
+          } catch (e) {
+            await alertDialog(t('set.paired'), t('set.setupNoLogin', { err: errorText(e) }));
+          } finally {
+            ownPw.input.value = '';
+            ownPw2.input.value = '';
+          }
+        }
         await refreshSettings();
-        toast(mode === 'login' ? t('auth.signedIn') : t('set.paired'));
+        if (mode !== 'setup') toast(mode === 'login' ? t('auth.signedIn') : t('set.paired'));
         void router.rerender();
       } catch (e) {
         err.textContent = errorText(e);
@@ -294,6 +318,7 @@ function connectForm(s: Settings): HTMLElement {
     pw.wrap,
     keyField,
     shopField,
+    ownBlock,
     h('label', 'field', h('span', { class: 'field-label', text: t('set.deviceName') }), devName),
     go,
     err,

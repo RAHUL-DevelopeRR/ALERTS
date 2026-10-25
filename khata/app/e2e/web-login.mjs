@@ -280,16 +280,23 @@ async function main() {
     await page.waitForFunction(() => document.querySelectorAll('[data-testid="cust-row"]').length >= 2, null, { timeout: 15_000 });
     const names = await page.locator('[data-testid="cust-row"]').allInnerTexts();
     check(names.some((n) => n.includes('Kamala')) && names.some((n) => n.includes('Murugan')), 'synced customers Kamala and Murugan are listed');
-    // The shop language (Tamil, shared by every device) wins over the login page's toggle after sign-in.
+    // The language picked on the login page stays after sign-in: it belongs to this browser, and the shop's language
+    // on the server (Tamil) does not override it (each phone and browser keeps its own).
+    await page.waitForFunction(() => document.querySelector('[data-testid="sync-pill"]')?.textContent === 'Online copy', null, { timeout: 15_000 });
+    check((await text('[data-testid="sync-pill"]')) === 'Online copy', 'the language picked on the login page (English) stays after sign-in');
+    const setLang = async (lang) => {
+      await tid('nav-settings').click();
+      await page.locator('.screen[data-route="settings"]').waitFor();
+      await tid(`set-lang-${lang}`).click();
+      await page.waitForFunction((l) => document.querySelector(`[data-testid="set-lang-${l}"]`)?.classList.contains('on'), lang);
+      await page.keyboard.press('Escape');
+      await home();
+    };
+    await setLang('ta');
     await page.waitForFunction(() => document.querySelector('[data-testid="sync-pill"]')?.textContent === 'ஆன்லைன் நகல்', null, { timeout: 15_000 });
-    check((await text('[data-testid="sync-pill"]')) === 'ஆன்லைன் நகல்', 'pill says "Online copy" in the shop language (Tamil)');
+    check((await text('[data-testid="sync-pill"]')) === 'ஆன்லைன் நகல்', 'Settings → தமிழ்: pill says "Online copy" in Tamil');
     await shot('home-ta');
-    await tid('nav-settings').click();
-    await page.locator('.screen[data-route="settings"]').waitFor();
-    await tid('set-lang-en').click();
-    await page.waitForFunction(() => document.querySelector('[data-testid="set-lang-en"]')?.classList.contains('on'));
-    await page.keyboard.press('Escape');
-    await home();
+    await setLang('en');
     await page.waitForFunction(() => document.querySelector('[data-testid="sync-pill"]')?.textContent?.includes('Online copy'), null, { timeout: 15_000 });
     check((await text('[data-testid="sync-pill"]')) === 'Online copy', 'pill says "Online copy"');
     check((await text('.summary-amt')) === '₹300', 'home total ₹300 (Kamala 150 + Murugan 150)');

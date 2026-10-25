@@ -23,11 +23,23 @@ export interface SyncEngine {
   status(): SyncStatus;
   /** Subscribe to status changes; returns unsubscribe. */
   subscribe(cb: (s: SyncStatus) => void): () => void;
-  /** Start triggers: foreground, network regained, debounced after local writes, every 15 min while open. */
+  /**
+   * Start triggers: foreground, network regained, 2 s after local writes, every 20 s while open and in use (every
+   * minute after 5 minutes with no touch, no save and nothing new from other phones).
+   */
   start(): void;
   stop(): void;
-  /** Call after any local write; schedules a push in ~30 s (debounced). */
+  /** Call after any local write; schedules a push in ~2 s (debounced). */
   notifyLocalWrite(): void;
+  /**
+   * A screen that shows balances opened (a customer's page, Home, the day book): sync now, quietly, when the last
+   * cycle ended more than `maxAgeMs` ago (default FRESH_MS, 5 s). Respects the retry backoff; no-op when unpaired.
+   */
+  refreshIfStale(maxAgeMs?: number): void;
+  /** Someone touched the phone: polls go back to every 20 s, and after a quiet spell what is on screen is fetched now. */
+  notifyActivity(): void;
+  /** After a cycle that brought rows from the server (other phones' entries): `n` = changes pulled. */
+  onRemoteChange(cb: (n: number) => void): () => void;
   /** Run one full cycle now (push all, then pull all). Resolves when done; never throws. */
   syncNow(): Promise<SyncStatus>;
 

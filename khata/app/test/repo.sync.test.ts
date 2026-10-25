@@ -156,7 +156,8 @@ describe('applyPullPage', () => {
     expect(await repo.getEntry(e.id)).toMatchObject({ sync_state: 'accepted', server_seq: 12, amount_paise: 7_000 });
     expect(await repo.getMeta('cursor')).toBe('15');
     const s = await repo.getSettings();
-    expect([s.shop_name, s.lang, s.upi_id]).toEqual(['New name', 'en', 'murugan@upi']);
+    // shop name and UPI come from the server; the language stays this phone's own choice
+    expect([s.shop_name, s.lang, s.upi_id]).toEqual(['New name', 'ta', 'murugan@upi']);
     const view = await repo.listEntries(other.id);
     expect(view[0].device_name).toBe('Helper phone');
     expect((await repo.dayBook('2026-10-12')).rows[0].device_name).toBe('Helper phone');

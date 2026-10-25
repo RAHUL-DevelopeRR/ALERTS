@@ -1,13 +1,22 @@
-/** First run: language -> shop name (+ UPI) -> PIN (recommended, can skip) -> done. No server needed. */
+/**
+ * First run: language -> how this phone is used ->
+ *   "Sign in to my shop": user id + password (made by the owner) on the shop server, which brings the shop's whole
+ *     ledger; staff phones and the owner's other phones. The server address is built into the APK when the release
+ *     was built for the shop (shop-server.ts), else typed once here.
+ *   "Start a new shop": shop name (+ UPI); the shop's first phone, no server needed (connect later in Settings).
+ * -> PIN (recommended, can skip) -> done.
+ */
 import { setLang, t } from '../../i18n';
 import { app, refreshSettings } from '../app';
-import { h } from '../components/dom';
+import { button, h } from '../components/dom';
 import { toast } from '../components/overlay';
 import { errorText } from '../errors';
 import { askNewPin, closeGate, logo, setGateBack, showGate } from '../gate';
+import { BUILT_IN_SERVER, serverHost } from '../shop-server';
+import { signInForm } from './login';
 
 function steps(n: number): HTMLElement {
-  return h('div', 'steps', [0, 1, 2, 3].map((i) => h('span', i === n ? 'on' : '')));
+  return h('div', 'steps', [0, 1, 2, 3, 4].map((i) => h('span', i === n ? 'on' : '')));
 }
 
 export function runOnboarding(): Promise<void> {
@@ -16,7 +25,7 @@ export function runOnboarding(): Promise<void> {
       const pick = async (lang: 'ta' | 'en'): Promise<void> => {
         await app.repo.saveSettings({ lang });
         setLang(lang);
-        stepShop();
+        stepUse();
       };
       showGate(
         'onb',
@@ -27,6 +36,76 @@ export function runOnboarding(): Promise<void> {
         h('button', { class: 'btn btn-outline-light lang-btn', attrs: { type: 'button', lang: 'en', 'data-testid': 'onb-en' }, text: 'English', on: { click: () => void pick('en') } }),
       );
       setGateBack(() => false);
+    };
+
+    const stepUse = (): void => {
+      const choice = (testid: string, title: string, sub: string, primary: boolean, go: () => void): HTMLElement =>
+        h(
+          'button',
+          { class: `btn ${primary ? 'btn-on-brand' : 'btn-outline-light'} btn-block onb-choice`, attrs: { type: 'button', 'data-testid': testid }, on: { click: go } },
+          h('span', { class: 'onb-choice-title', text: title }),
+          h('span', { class: 'onb-choice-sub', text: sub }),
+        );
+      showGate(
+        'onb',
+        steps(1),
+        h('div', 'gate-head', h('h2', { text: t('onb.useTitle') })),
+        choice('onb-join', t('onb.useJoin'), t('onb.useJoinSub'), true, () => stepJoin()),
+        choice('onb-new', t('onb.useNew'), t('onb.useNewSub'), false, () => stepShop()),
+      );
+      setGateBack(() => {
+        stepLang();
+        return true;
+      });
+    };
+
+    const stepJoin = (): void => {
+      let editServer = !BUILT_IN_SERVER;
+      const url = h('input', {
+        class: 'input',
+        attrs: { type: 'url', inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: t('set.serverUrlPh'), 'data-testid': 'onb-srv' },
+      });
+      url.value = BUILT_IN_SERVER;
+      const urlField = h('label', 'field', h('span', { class: 'field-label', text: t('set.serverUrl') }), url);
+      const serverLine = h(
+        'p',
+        { class: 'input-help onb-server-line', attrs: { 'data-testid': 'onb-srv-line' } },
+        t('onb.serverLine', { host: serverHost(BUILT_IN_SERVER) }),
+        ' ',
+        button(t('onb.serverChange'), () => {
+          editServer = true;
+          serverLine.classList.add('hidden');
+          urlField.classList.remove('hidden');
+          url.focus();
+        }, 'link', { 'data-testid': 'onb-srv-change' }),
+      );
+      urlField.classList.toggle('hidden', !editServer);
+      serverLine.classList.toggle('hidden', editServer);
+      const devName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 60, autocomplete: 'off', 'data-testid': 'onb-device' } });
+      void app.platform.deviceModel().then((m) => { if (!devName.value) devName.value = m; }).catch(() => undefined);
+      const form = signInForm({
+        testidPrefix: 'onb',
+        buttonClass: 'btn btn-primary btn-big btn-block',
+        extra: h('label', 'field', h('span', { class: 'field-label', text: t('set.deviceName') }), devName),
+        run: async (username, password, onProgress) => {
+          await app.sync.login(url.value.trim(), username, password, devName.value.trim() || 'Phone', { onProgress });
+          await refreshSettings();
+        },
+        onDone: () => {
+          toast(t('onb.joined', { shop: app.settings.shop_name || serverHost(url.value.trim()) }));
+          stepPin();
+        },
+      });
+      showGate(
+        'onb',
+        steps(2),
+        h('div', 'gate-head', h('h2', { text: t('onb.joinTitle') }), h('p', { text: t('onb.joinHelp') })),
+        h('div', 'card', serverLine, urlField, form),
+      );
+      setGateBack(() => {
+        stepUse();
+        return true;
+      });
     };
 
     const stepShop = (): void => {
@@ -53,7 +132,7 @@ export function runOnboarding(): Promise<void> {
       });
       showGate(
         'onb',
-        steps(1),
+        steps(2),
         h('div', 'gate-head', h('h2', { text: t('onb.shopTitle') })),
         h(
           'div',
@@ -65,7 +144,7 @@ export function runOnboarding(): Promise<void> {
         next,
       );
       setGateBack(() => {
-        stepLang();
+        stepUse();
         return true;
       });
       sync();
@@ -89,7 +168,7 @@ export function runOnboarding(): Promise<void> {
     const stepDone = (): void => {
       showGate(
         'onb',
-        steps(3),
+        steps(4),
         h('div', 'gate-head', logo(), h('h1', { text: t('onb.doneTitle') })),
         h('p', { style: { textAlign: 'center' }, text: t('onb.doneHelp') }),
         h('div', 'gate-spacer'),

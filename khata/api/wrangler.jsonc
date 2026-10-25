@@ -33,7 +33,9 @@
     { "name": "AUTH_LIMITER", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } }
   ],
   "vars": {
-    "DAILY_REQUEST_CAP": "5000",
+    // Per device per UTC day. Fast sync polls every 20 s while a phone is in use (once a minute when idle): a counter
+    // phone left open day and night makes about 4,000 at most; the cap stops one broken phone eating the 100k/day.
+    "DAILY_REQUEST_CAP": "10000",
     "PAIR_THROTTLE_AFTER": "20",
     // Wrong password logins per UTC day (whole shop) before the 1-per-30-s throttle.
     "AUTH_THROTTLE_AFTER": "100",

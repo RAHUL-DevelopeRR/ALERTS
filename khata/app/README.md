@@ -165,9 +165,10 @@ When setup is finished, you can turn **USB debugging** off again on the shop's p
 <!-- =================== Accounts & web app (v2) =================== -->
 ## Accounts and the web app (v2)
 
-Besides pairing with a code, a phone can **sign in with a user id and password** (Settings → Shop server → "Sign in
-with user id & password"), and the owner can use the **web app** that the Worker serves at the server address
-(`https://<name>.workers.dev/`). Protocol: `shared/protocol.ts` ("v2: accounts"); server side: `khata/api/README.md`.
+Besides pairing with a code, a phone can **sign in with a user id and password** (on first launch: "Sign in to my
+shop"; later: Settings → Shop server → "Sign in with user id & password"), and the owner can use the **web app**
+that the Worker serves at the server address (`https://<name>.workers.dev/`). Protocol: `shared/protocol.ts`
+("v2: accounts"); server side: `khata/api/README.md`.
 
 | Piece | Where | Notes |
 |---|---|---|
@@ -183,6 +184,28 @@ Deploy: `tools/deploy-server.sh` builds the web app (`npm ci && vite build --mod
 `wrangler deploy` and prints the web app URL. The web app's security headers (CSP with `'wasm-unsafe-eval'` for sql.js
 and the Google Identity Services origins) come from `khata/api/web/_headers`.
 <!-- =================== end Accounts & web app =================== -->
+
+<!-- =================== Fast sync (2.3.0) =================== -->
+## Fast sync: several counters, one ledger (2.3.0)
+
+One shop with several phones: an entry saved at one counter shows on the others within about 20 s, and a customer's
+page is fetched fresh when it opens. Polling, no server change and no push service: a phone asks the server for
+other phones' rows (the change log, `since=<cursor>`), which costs one small request when nothing is new.
+
+| Piece | Where | Notes |
+|---|---|---|
+| Timers | `src/sync/engine.ts` | `DEBOUNCE_MS` 2 s after a save (a burst goes out in one push), `INTERVAL_MS` 20 s while the app is open and in use, `IDLE_INTERVAL_MS` 1 min after `IDLE_AFTER_MS` (5 min) with no touch (`notifyActivity()`), no save and nothing new from other phones; coming back to the app, a save or other phones' rows count as use. Backoff on errors as before (5 s … 1 h). |
+| Quiet polls | `src/sync/engine.ts` | The 20-s poll and `refreshIfStale()` do not set the "Syncing" phase, so the pill does not flash; a save, network regained and Sync now still show it. |
+| Fresh on open | `refreshIfStale()` in `home.ts`, `customer.ts`, `daybook.ts`, voice mode's card | Syncs at once when the last cycle ended more than `FRESH_MS` (5 s) ago; respects the backoff; no-op when unpaired. The balance told to a customer includes the other counters' entries. The first touch after an idle spell does the same (`notifyActivity()`). |
+| Live redraw | `src/ui/live.ts` | `onRemoteChange(n)` after a cycle that pulled other phones' rows → re-render Home, a customer's page, the day book, a statement or quick entry, but only when safe: no focused input / textarea / select, no dialog or sheet (`hasLayers()`), not behind the PIN gate; otherwise retried every 1.5 s until safe or the person moved on. The keypad, the customer form and Settings never redraw under the person's fingers. Voice mode refreshes its customer list and the open card (`voice/mode.ts`). A touch or key press anywhere calls `notifyActivity()`. |
+| Sign in on first launch | `src/ui/screens/onboarding.ts` | After the language: **Sign in to my shop** (user id, password, phone name; the server address only when the APK has none built in) or **Start a new shop** (the v1 flow). Then the PIN step. |
+| Built-in server address | `src/ui/shop-server.ts`, `tools/build-release-apk.sh` | `SHOP_SERVER_URL=https://… ./tools/build-release-apk.sh` → Vite `VITE_SHOP_SERVER_URL` → `BUILT_IN_SERVER`: sign-in shows "Shop server: <host>" with a Change link instead of an address box, and Settings → Shop server is prefilled. Empty in a generic build. |
+| Owner login at setup | `src/ui/screens/settings.ts` | Settings → Shop server opens on "Sign in"; First-time setup asks for the owner's user id and password (twice) and creates the login right after pairing (`createUser({ role: 'owner', link_me: true })`, allowed without step-up while the shop has no users). If that fails the phone stays paired and "Create a login for me" remains. |
+| Language per phone | `src/data/repo.ts` (`applyPullPage`, `completePairing`), `settings.ts` | The language is no longer copied from the shop on every pull (with 20-s polls that would undo a choice within seconds): each phone and browser keeps the one picked on it. |
+| Server load | `khata/api` | An empty pull = three indexed reads in one batch + the device-row update in the auth middleware. A busy counter phone left open day and night makes about 4,000 requests a day; `DAILY_REQUEST_CAP` is now 10,000 per device; Workers Free allows 100,000 requests and 100,000 D1 row writes per day for the shop. |
+| Tests | `test/sync.triggers.test.ts`, `test/repo.sync.test.ts` | 2-s debounce, 20-s poll only in the foreground, quiet polls, `refreshIfStale` (fresh / stale / unpaired / backoff), `onRemoteChange` after another phone's entries only, idle slow-down and what counts as use; the language stays per phone. |
+| End to end | `node e2e/multi-device.mjs` | `wrangler dev --local` on a fresh D1 + a build with the server built in + two Chromium contexts (owner phone, counter phone, `--disable-web-security` for the cross-origin API). Owner: new shop, First-time setup with a login, a staff user (step-up). Counter: Sign in to my shop (built-in server line, wrong password refused), phone name "Counter 2". Owner → counter entry on the counter's open Home, a customer page fresh on open, counter → owner entry with the "Counter 2" badge, counter offline ("Offline · 1 waiting") then caught up, a focused search box not redrawn until it loses the focus, no console errors. Screenshots `e2e/screenshots/md-*.png`. Measured: 19–20 s between counters (the 2-s push plus up to one 20-s poll), a customer page fresh in 0.1 s, an offline phone's entry on the other phone 16 s after it is back online. |
+<!-- =================== end Fast sync =================== -->
 
 <!-- =================== Voice entry (v2) =================== -->
 ## Voice entry (v2)
@@ -352,7 +375,8 @@ Verified here:
   `vite build`, `vite build --mode web`, `vite build --mode android` + `cap sync android` + `gradlew assembleDebug`.
 - `node e2e/flows.mjs` (v1 flows, Tamil + English), `node e2e/voice.mjs` (voice flows with the fake recogniser),
   `node e2e/voice-mode.mjs` (voice mode, the always-listening counter screen, with the fake recogniser),
-  `node e2e/web-login.mjs` (web app against `wrangler dev --local`), and `test/sync.integration.test.ts` (two
+  `node e2e/web-login.mjs` (web app against `wrangler dev --local`), `node e2e/multi-device.mjs` (fast sync: an
+  owner phone and a counter phone against `wrangler dev --local`), and `test/sync.integration.test.ts` (two
   engines against `wrangler dev`).
 - Merged manifest permissions: INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO (+ the signature-only
   `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`); `<queries>` for the speech service; 16 KB page alignment.
@@ -367,6 +391,8 @@ Not verified on a phone (check these first on the real device, and keep the pape
   on hardware).
 - Password login from the Android app against a deployed Worker (verified against `wrangler dev` from Node and
   Chromium only), secure-storage of the token and `known_device`, and the step-up dialog on a phone.
+- Fast sync between real phones over mobile data and shop Wi-Fi (request latency to Cloudflare's APAC D1 from the
+  shop, battery and data use of the 20-s poll over a day, the timers pausing when the screen turns off).
 - Google sign-in on the web against real Google Identity Services (no OAuth client id here; the nonce flow is
   exercised against the fake server only). Android Google sign-in is not built.
 <!-- =================== end Verification status =================== -->

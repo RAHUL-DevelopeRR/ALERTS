@@ -72,7 +72,7 @@ export const auth: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (revoked) return fail(c, 401, 'revoked', { wipe: revoked.wipe_on_revoke === 1 });
     return fail(c, 401, 'unauthorized');
   }
-  if (device.requests_today > intVar(c.env.DAILY_REQUEST_CAP, 5000)) return fail(c, 429, 'daily_cap');
+  if (device.requests_today > intVar(c.env.DAILY_REQUEST_CAP, 10000)) return fail(c, 429, 'daily_cap');
   c.set('device', device);
   c.set('shop', shopRow);
   await next();

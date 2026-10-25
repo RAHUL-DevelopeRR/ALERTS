@@ -106,6 +106,7 @@ export const dayBookScreen: Screen = async (root, route) => {
     app.repo.enteredOn(date),
     app.repo.monthTotals(date.slice(0, 7)),
   ]);
+  app.sync.refreshIfStale();
   const rows = tab === 'business' ? book.rows : entered;
   const tot = tab === 'business' ? book.totals : totalsOf(entered, date);
 

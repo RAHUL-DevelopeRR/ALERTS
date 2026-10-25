@@ -15,6 +15,15 @@
  *   (5 s, 30 s, 2 min, 10 min, then hourly, each with +/-20 % jitter). Manual syncNow() always tries now.
  * - 401 -> keep the still-unsynced rows (a private file when the owner asked to wipe), clear the token, unpair.
  * - syncNow() never throws.
+ * - Fast sync (one shop, several counters): a save is pushed DEBOUNCE_MS (2 s) later, and while the app is open
+ *   it looks for other phones' entries every INTERVAL_MS (20 s); a screen that shows balances calls
+ *   refreshIfStale() when it opens, so a customer's page is fresh at once. These polls are quiet: the status does
+ *   not flash "Syncing" every 20 s. A cycle that brought other phones' rows notifies onRemoteChange() so the open
+ *   screen can redraw. After IDLE_AFTER_MS (5 min) with nobody using this phone (no touch: notifyActivity(), no
+ *   save) and nothing new from the other phones, it polls every IDLE_INTERVAL_MS (1 min) instead; the next touch
+ *   fetches at once and brings the 20-s polls back. A poll is one small request (the server answers "nothing new"
+ *   from an index): a counter phone left open day and night stays far below the server's per-phone daily cap, and
+ *   five phones stay far inside the Workers Free limits.
  *
  * v2 accounts (shared/protocol.ts "v2: accounts"): login() / googleLogin() create a session device exactly like
  * pair() (same completePairing path), logout() revokes it. Option `web` = the web app: cookie sessions (ApiClient
@@ -66,8 +75,15 @@ const EMPTY_BLOCK = { start: 1, end: 0 };
 const MAX_STEPUP_TRIES = 3;
 /** Prefix of the private file that keeps unsynced rows before a remote wipe (`<prefix>-<timestamp>.json`). */
 export const UNSYNCED_FILE_PREFIX = 'unsynced-before-wipe';
-export const DEBOUNCE_MS = 30_000;
-export const INTERVAL_MS = 15 * 60_000;
+/** Push this soon after a save; a burst of saves (voice mode, quick entry) goes out in one request. */
+export const DEBOUNCE_MS = 2_000;
+/** While the app is open and in use, look for other phones' entries this often. */
+export const INTERVAL_MS = 20_000;
+/** ... and this often once nobody has used this phone and no other phone has saved anything for IDLE_AFTER_MS. */
+export const IDLE_INTERVAL_MS = 60_000;
+export const IDLE_AFTER_MS = 5 * 60_000;
+/** refreshIfStale(): sync when a balance screen opens and the last cycle is older than this. */
+export const FRESH_MS = 5_000;
 export const BACKOFF_MS: readonly number[] = [5_000, 30_000, 120_000, 600_000, 3_600_000];
 /** Request a new customer-code block when fewer than this many codes are left. */
 export const CODES_LOW_WATER = 10;
@@ -91,6 +107,8 @@ export interface SyncEngineOptions {
   requestTimeoutMs?: number;
   debounceMs?: number;
   intervalMs?: number;
+  idleIntervalMs?: number;
+  idleAfterMs?: number;
   backoffMs?: readonly number[];
   /** The web app: cookie sessions on same-origin URLs, no token storage, codes only on request (see module comment). */
   web?: boolean;
@@ -100,7 +118,9 @@ export interface SyncEngineOptions {
   stepUp?: StepUpProvider;
 }
 
-type Trigger = 'start' | 'foreground' | 'online' | 'write' | 'interval' | 'retry';
+type Trigger = 'start' | 'foreground' | 'online' | 'write' | 'interval' | 'retry' | 'view';
+/** Triggers that run without the "Syncing" status (the every-20-s poll and a screen asking for fresh data). */
+const QUIET: ReadonlySet<Trigger> = new Set<Trigger>(['interval', 'view']);
 type RoundResult = 'done' | 'epoch';
 
 interface Ctx {
@@ -140,6 +160,8 @@ export class Engine implements SyncEngine {
   private readonly random: () => number;
   private readonly debounceMs: number;
   private readonly intervalMs: number;
+  private readonly idleIntervalMs: number;
+  private readonly idleAfterMs: number;
   private readonly backoff: readonly number[];
   private readonly apiOpts: ApiClientOptions;
   readonly web: boolean;
@@ -153,6 +175,15 @@ export class Engine implements SyncEngine {
     phase: 'unpaired', pending: 0, last_sync_at: null, error: null, clock_skew_ms: 0, rejected: 0,
   };
   private readonly subs = new Set<(s: SyncStatus) => void>();
+  private readonly remoteSubs = new Set<(n: number) => void>();
+  /** Changes pulled from the server in the running cycle (other phones' rows; all rows on a first pull). */
+  private pulled = 0;
+  /** ms timestamp when the last cycle ended (successfully or not); refreshIfStale() compares against it. */
+  private lastCycleAt = 0;
+  /** A rerun was asked for by a trigger that should show "Syncing" (a write, network regained, ...). */
+  private rerunLoud = false;
+  /** ms timestamp of the last sign of use: app opened, a touch, a save here, other phones' rows arriving. */
+  private lastActivityAt = 0;
 
   private running: Promise<void> | null = null;
   private rerun = false;
@@ -174,6 +205,8 @@ export class Engine implements SyncEngine {
     this.random = opts.random ?? Math.random;
     this.debounceMs = opts.debounceMs ?? DEBOUNCE_MS;
     this.intervalMs = opts.intervalMs ?? INTERVAL_MS;
+    this.idleIntervalMs = opts.idleIntervalMs ?? IDLE_INTERVAL_MS;
+    this.idleAfterMs = opts.idleAfterMs ?? IDLE_AFTER_MS;
     this.backoff = opts.backoffMs && opts.backoffMs.length ? opts.backoffMs : BACKOFF_MS;
     this.web = opts.web === true;
     this.derive = opts.deriveKey ?? deriveClientKey;
@@ -356,6 +389,7 @@ export class Engine implements SyncEngine {
       this.trackClock(page.server_time);
       if (await this.epochChanged(page.sync_epoch)) return 'epoch';
       await this.repo.applyPullPage(page, since); // ignored if a restore/requeue reset the cursor meanwhile
+      this.pulled += page.changes.length;
       if (!page.has_more || page.next_since <= since) return 'done';
     }
     return 'done';
@@ -372,7 +406,29 @@ export class Engine implements SyncEngine {
     return true;
   }
 
-  private async cycle(manual: boolean): Promise<void> {
+  private async cycle(manual: boolean, quiet = false): Promise<void> {
+    this.pulled = 0;
+    try {
+      await this.cycleInner(manual, quiet);
+    } finally {
+      this.lastCycleAt = this.nowMs();
+    }
+    if (this.pulled > 0) {
+      const n = this.pulled;
+      this.pulled = 0;
+      // The shop is busy at another counter: keep this phone's screen current too.
+      this.markActive();
+      for (const cb of [...this.remoteSubs]) {
+        try {
+          cb(n);
+        } catch {
+          /* a broken subscriber must not break sync */
+        }
+      }
+    }
+  }
+
+  private async cycleInner(manual: boolean, quiet: boolean): Promise<void> {
     let ctx: Ctx | null;
     try {
       ctx = await this.context();
@@ -397,7 +453,7 @@ export class Engine implements SyncEngine {
       }
     }
     this.lastSkew = null;
-    await this.refresh({ phase: 'syncing' });
+    if (!quiet) await this.refresh({ phase: 'syncing' });
     try {
       for (let round = 0; ; round++) {
         if (round >= MAX_ROUNDS) throw new SyncError('server', 'sync did not settle (epoch changing)');
@@ -529,23 +585,29 @@ export class Engine implements SyncEngine {
 
   // ---------------------------------------------------------------- running cycles
 
-  private run(manual: boolean): Promise<void> {
+  private run(manual: boolean, quiet = false): Promise<void> {
     if (this.running) {
-      if (!manual) this.rerun = true;
+      if (!manual) {
+        this.rerun = true;
+        if (!quiet) this.rerunLoud = true;
+      }
       return this.running;
     }
     const p = (async () => {
       try {
         let first = true;
         let loops = 0;
+        let q = quiet && !manual;
         do {
           this.rerun = false;
+          this.rerunLoud = false;
           try {
-            await this.cycle(first && manual);
+            await this.cycle(first && manual, q);
           } catch {
             /* cycle() handles its own errors; this is a last-resort guard */
           }
           first = false;
+          q = !this.rerunLoud;
         } while (this.rerun && this.started && ++loops < 3);
       } finally {
         this.running = null;
@@ -559,7 +621,39 @@ export class Engine implements SyncEngine {
     if (!this.started) return;
     // Backoff applies to automatic triggers; network regained (and the retry timer itself) go now.
     if (reason !== 'online' && reason !== 'retry' && reason !== 'start' && this.nowMs() < this.nextRetryAt) return;
-    void this.run(false);
+    void this.run(false, QUIET.has(reason));
+  }
+
+  refreshIfStale(maxAgeMs: number = FRESH_MS): void {
+    if (!this.started || this.running) return;
+    if (this.nowMs() - this.lastCycleAt < maxAgeMs) return;
+    this.trigger('view');
+  }
+
+  notifyActivity(): void {
+    const wasIdle = this.isIdle();
+    this.markActive();
+    // Back from a quiet spell: the last poll can be a minute old, so fetch for the screen being looked at now.
+    if (wasIdle) this.refreshIfStale();
+  }
+
+  private isIdle(): boolean {
+    return this.nowMs() - this.lastActivityAt >= this.idleAfterMs;
+  }
+
+  /** Someone uses this phone, or another phone saved something: poll at the fast rate (again). */
+  private markActive(): void {
+    const wasIdle = this.isIdle();
+    this.lastActivityAt = this.nowMs();
+    // The slow timer may be a minute away: replace it with a fast one.
+    if (wasIdle) this.armInterval();
+  }
+
+  onRemoteChange(cb: (n: number) => void): () => void {
+    this.remoteSubs.add(cb);
+    return () => {
+      this.remoteSubs.delete(cb);
+    };
   }
 
   async syncNow(): Promise<SyncStatus> {
@@ -574,6 +668,7 @@ export class Engine implements SyncEngine {
   notifyLocalWrite(): void {
     void this.refresh();
     if (!this.started) return;
+    this.markActive();
     if (this.debounceTimer !== null) this.clearT(this.debounceTimer);
     this.debounceTimer = this.setT(() => {
       this.debounceTimer = null;
@@ -589,6 +684,7 @@ export class Engine implements SyncEngine {
       this.platform.onAppStateChange((active) => {
         this.active = active;
         if (active) {
+          this.lastActivityAt = this.nowMs();
           this.armInterval();
           this.trigger('foreground');
         } else {
@@ -601,6 +697,7 @@ export class Engine implements SyncEngine {
         if (online) this.trigger('online');
       }),
     );
+    this.lastActivityAt = this.nowMs();
     this.armInterval();
     this.trigger('start');
   }
@@ -623,11 +720,14 @@ export class Engine implements SyncEngine {
   private armInterval(): void {
     this.disarmInterval();
     if (!this.started || !this.active) return;
-    this.intervalTimer = this.setT(() => {
-      this.intervalTimer = null;
-      this.trigger('interval');
-      this.armInterval();
-    }, this.intervalMs);
+    this.intervalTimer = this.setT(
+      () => {
+        this.intervalTimer = null;
+        this.trigger('interval');
+        this.armInterval();
+      },
+      this.isIdle() ? this.idleIntervalMs : this.intervalMs,
+    );
   }
 
   private disarmInterval(): void {

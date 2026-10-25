@@ -200,6 +200,7 @@ async function main() {
     await page.goto(server.url);
     await tid('onb-en').waitFor();
     await tid('onb-en').click();
+    await tid('onb-new').click();
     await tid('onb-shop').fill('Sri Murugan Stores');
     await tid('onb-next').click();
     await tid('pin-skip').waitFor();

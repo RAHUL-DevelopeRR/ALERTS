@@ -90,6 +90,8 @@ function customerRow(r: HomeRow, paired: boolean): HTMLElement {
 export const homeScreen: Screen = async (root, route) => {
   const s = await refreshSettings();
   const [rows, totals, onboarded] = await Promise.all([app.repo.listHome(), app.repo.totals(), app.repo.getMeta('onboarded'), loadVoicePrefs()]);
+  // Other phones' latest entries: fetched now if the last sync is older than a few seconds (redraws when they land).
+  app.sync.refreshIfStale();
   if (route.params.fresh === '1') {
     homeState.q = '';
     delete route.params.fresh;

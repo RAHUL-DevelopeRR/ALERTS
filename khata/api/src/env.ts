@@ -10,6 +10,7 @@ export interface Bindings {
   PEPPER?: string;
   /** Optional secret enabling POST /v1/setup. */
   SETUP_KEY?: string;
+  /** Requests per device per UTC day (default 10000: a busy counter phone left open day and night makes about 4,000 at most). */
   DAILY_REQUEST_CAP?: string;
   PAIR_THROTTLE_AFTER?: string;
   /** Workers Rate Limiting binding: per-client-IP first layer in front of /pair. Optional. */
