@@ -23,6 +23,21 @@ export interface VoicePrefill {
   queue?: { index: number; total: number };
   /** Continue with the next entry of the utterance (after Save, or after leaving without saving). */
   next?: () => void;
+  /**
+   * Voice mode: the keypad (and a new customer's form before it) returns to the voice-mode screen, and reports the
+   * outcome here instead of a toast: the saved entry, or null when the shopkeeper went back without saving.
+   */
+  onDone?: (saved: VoiceSaved | null) => void;
+}
+
+/** What the keypad saved for a voice prefill (voice mode logs it). */
+export interface VoiceSaved {
+  entryId: string;
+  customerId: string;
+  name: string;
+  kind: 'GIVE' | 'RECEIVE';
+  amount_paise: number;
+  balance_paise: number;
 }
 
 export function prefillFromIntent(intent: VoiceIntent, queue?: { index: number; total: number }): VoicePrefill {

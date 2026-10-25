@@ -2,7 +2,8 @@
  * Add / edit customer: name (required), mobile (optional, duplicate warning), note. "Save & add credit" first.
  * From quick entry (params.quick = '1'): saving goes straight to the keypad in quick mode, which returns to the
  * quick list, so the sitting (count, sticky date) carries on.
- * From voice entry (state.voice, an unknown name): saving opens the keypad prefilled with what was heard.
+ * From voice entry (state.voice, an unknown name): saving opens the keypad prefilled with what was heard (from
+ * voice mode in place of this form, so the keypad returns to the listening screen).
  */
 import { cleanName, formatCode, formatPhone, normalizePhone, normName } from '../../core/ledger';
 import type { Customer } from '../../data/types';
@@ -147,8 +148,12 @@ export const customerEditScreen: Screen = async (root, route) => {
       afterWrite();
       toast(t('cust.savedAs', { code: formatCode(c.code) }));
       if (voice) {
-        if (!fromQuick) await router.replace('customer', { id: c.id });
-        await (fromQuick ? router.replace('entry', ...voiceEntry(c.id)) : router.go('entry', ...voiceEntry(c.id)));
+        // Quick entry and voice mode come back to their own list / listening screen after the keypad.
+        if (fromQuick || voice.onDone) await router.replace('entry', ...voiceEntry(c.id));
+        else {
+          await router.replace('customer', { id: c.id });
+          await router.go('entry', ...voiceEntry(c.id));
+        }
         return;
       }
       if (fromQuick) {

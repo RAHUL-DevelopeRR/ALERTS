@@ -126,6 +126,7 @@ async function copyText(text: string): Promise<void> {
 
 export function createWebPlatform(): Platform {
   let speech: Speech | null = null;
+  let wakeLock: { released?: boolean; release(): Promise<void> } | null = null;
   return {
     isNative: false,
 
@@ -135,7 +136,9 @@ export function createWebPlatform(): Platform {
         const script = typeof window !== 'undefined' ? window.__KK_FAKE_SPEECH__ : undefined;
         if (Array.isArray(script)) {
           window.__KK_FAKE_SPEECH_OPTIONS__ ??= {};
-          speech = createFakeSpeech(script, window.__KK_FAKE_SPEECH_OPTIONS__);
+          const fake = createFakeSpeech(script, window.__KK_FAKE_SPEECH_OPTIONS__);
+          window.__KK_FAKE_SPEECH_CALLS__ = fake.calls;
+          speech = fake;
         } else {
           speech = createWebSpeech();
         }
@@ -273,6 +276,23 @@ export function createWebPlatform(): Platform {
 
     async hapticTap() {
       /* no-op on web */
+    },
+
+    async keepAwake(on) {
+      // Screen Wake Lock API (Chrome); released by the browser when the tab is hidden, so voice mode asks again
+      // on every resume. Missing or refused (no user gesture, battery saver): nothing to do.
+      try {
+        if (!on) {
+          await wakeLock?.release();
+          wakeLock = null;
+          return;
+        }
+        const nav = navigator as Navigator & { wakeLock?: { request(type: 'screen'): Promise<{ released?: boolean; release(): Promise<void> }> } };
+        if (!nav.wakeLock || (wakeLock && !wakeLock.released)) return;
+        wakeLock = await nav.wakeLock.request('screen');
+      } catch {
+        wakeLock = null;
+      }
     },
 
     async deviceModel() {

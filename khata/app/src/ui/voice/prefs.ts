@@ -22,6 +22,12 @@ export interface VoicePrefs {
   hold: boolean;
   /** Clear voice entries (known customer + amount + entry word) are saved after a short countdown (default on). */
   autosave: boolean;
+  /** Voice mode (always listening, mode.ts): its own notice (keeps listening, Approve needed) was accepted. */
+  mode_notice_ok: boolean;
+  /** Voice mode pauses by itself after this many minutes without an entry (15, 60; 0 = never). */
+  mode_idle: number;
+  /** Voice mode asks the recogniser to start without its beep (plugin muteRecognizerBeep; default on). */
+  mode_quiet: boolean;
 }
 
 export interface VoiceStats {
@@ -37,7 +43,10 @@ export interface VoiceStats {
   cancelled: number;
 }
 
-export const DEFAULT_VOICE_PREFS: VoicePrefs = { on: true, lang: 'ta-IN', bare: 'RECEIVE', notice_ok: false, hold: true, autosave: true };
+export const DEFAULT_VOICE_PREFS: VoicePrefs = {
+  on: true, lang: 'ta-IN', bare: 'RECEIVE', notice_ok: false, hold: true, autosave: true,
+  mode_notice_ok: false, mode_idle: 15, mode_quiet: true,
+};
 export const EMPTY_VOICE_STATS: VoiceStats = { heard: 0, saved: 0, amount_edited: 0, kind_changed: 0, cancelled: 0 };
 
 let cached: VoicePrefs | null = null;
@@ -54,6 +63,9 @@ export function parseVoicePrefs(json: string | null): VoicePrefs {
     if (typeof o.notice_ok === 'boolean') out.notice_ok = o.notice_ok;
     if (typeof o.hold === 'boolean') out.hold = o.hold;
     if (typeof o.autosave === 'boolean') out.autosave = o.autosave;
+    if (typeof o.mode_notice_ok === 'boolean') out.mode_notice_ok = o.mode_notice_ok;
+    if (o.mode_idle === 0 || o.mode_idle === 15 || o.mode_idle === 60) out.mode_idle = o.mode_idle;
+    if (typeof o.mode_quiet === 'boolean') out.mode_quiet = o.mode_quiet;
   } catch {
     /* defaults */
   }

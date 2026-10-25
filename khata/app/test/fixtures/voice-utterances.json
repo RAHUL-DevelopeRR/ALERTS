@@ -398,5 +398,17 @@
 {"cat": "slang", "alts": ["Ramu 100 kadanai adaichitaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
 {"cat": "slang", "alts": ["ராமு 100 கடனை அடைச்சிட்டான்"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "RECEIVE", "confidence": "high"}},
 {"cat": "slang", "alts": ["Ramu 100 kadan vachuttu poitaan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": "GIVE", "confidence": "high"}},
-{"cat": "slang", "alts": ["Ramu 100 vachirukkan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": null}}
+{"cat": "slang", "alts": ["Ramu 100 vachirukkan"], "customers": "default", "expect": {"name": "ramu", "amount": 100, "kind": null}},
+{"cat": "obligation", "alts": ["Ramu 500 kudukkanum"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE", "confidence": "high"}},
+{"cat": "obligation", "alts": ["ராமு 500 குடுக்கணும்"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE", "confidence": "high"}},
+{"cat": "obligation", "alts": ["ராமு 500 கொடுக்கணும்"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE"}},
+{"cat": "obligation", "alts": ["Ramu 500 kodukkanum"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE"}},
+{"cat": "obligation", "alts": ["Ramukku 500 kudukkanum"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE"}},
+{"cat": "obligation", "alts": ["Ramu 500 tharanum"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE"}},
+{"cat": "obligation", "alts": ["Ramu anju nooru kudukkanum"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE"}},
+{"cat": "obligation", "alts": ["Kumar 300 kudukka vendiyathu"], "customers": "default", "expect": {"name": "kumar", "amount": 300, "kind": "GIVE", "confidence": "medium"}},
+{"cat": "obligation", "alts": ["Ramu 500 kattanum"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": "GIVE", "confidence": "low"}},
+{"cat": "obligation", "alts": ["Kumar 200 kudutharu"], "customers": "default", "expect": {"name": "kumar", "amount": 200, "kind": "RECEIVE", "confidence": "high"}},
+{"cat": "obligation", "alts": ["Seenu 200 kudutharu"], "customers": "default", "expect": {"name": null, "amount": 200, "kind": "RECEIVE"}},
+{"cat": "obligation", "alts": ["Ramu 500 kudukkala"], "customers": "default", "expect": {"name": "ramu", "amount": 500, "kind": null}}
 ]

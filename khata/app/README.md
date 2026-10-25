@@ -292,6 +292,52 @@ ordered pairs of 82 common shop names in `test/voice.names.test.ts` no two diffe
 phone (`src/ui/voice/aliases.ts`, meta `voice_aliases`, at most 300, never synced); next time it matches that customer
 at 1.0. A learned form that later becomes a real customer's name is ignored. Settings → Voice entry → "Learned names"
 lists them and can forget them all. The "Try voice" tester shows "heard “…”, NN% match" for non-exact names.
+### Voice mode: keeps listening, every entry approved (2.2.0)
+
+Home → **Voice mode** (bottom bar) opens a screen that keeps listening until **Stop**, so an employee can say entries
+one after another with the phone lying on the counter:
+
+```
+listening ──"Ramu 500 kudukkanum"──> card: Ramu · ₹500 · Debit · Due ₹300 → ₹800
+             [Skip] [Edit] [Approve Debit ₹500] ──Approve──> saved, "This session" list (Undo) ──> listening …
+```
+
+- **One session after another** (`src/ui/voice/mode.ts`): each recogniser session ends on silence, on Google's own
+  end of speech, at `MODE_LISTEN_MS` (20 s) or early: a complete entry (name, amount, entry word) that stays the same
+  for `EARLY_STOP_MS` (0.9 s) in the live transcript stops the session even if the shop keeps talking after it
+  (`StableSignature`, `entrySignature()` in `mode-logic.ts`). The next session starts 0.25 s after the last one; a
+  session that ends at once with nothing backs off (0.5 s … 5 s) instead of spinning.
+- **Counter talk is ignored** (`modeAction()`): a card only for an amount plus a customer in the book (direction may be
+  missing: the card asks Debit or Credit), or an amount plus an entry word for a name nobody has (a new-customer card:
+  "Add “Seenu” & approve"). "arisi 50 rupa", greetings and prices only show on the status line ("Not an entry: …",
+  "say the amount too"); "Ramu baaki evvalavu" answers "Ramu: Due ₹800" there.
+- **The microphone is off while a card waits**: nothing queues up behind it and nothing is streamed. Approve runs the
+  keypad's checks (large amount, more than the due, the same entry within a minute) as dialogs, adds a new customer if
+  needed, saves, logs it with Undo, and listening starts again. Edit opens the usual keypad (a new name: the customer
+  form first) and returns here (`VoicePrefill.onDone`); Back from it brings the card back. Two entries in one sentence
+  become two cards in a row. Two customers with one name: the card lists both and Approve waits for a tap.
+- **Pausing**: Pause / Resume (also the big mic), Stop (summary toast: "Voice mode off. 6 saved: Debit ₹865, Credit
+  ₹250."). It pauses by itself when the app goes to the background (and resumes when it is back, after the PIN if it
+  locked), while the keypad is open, after **15 minutes without an entry** (Settings → Voice entry → 15 min / 1 hour /
+  never; saves battery and data), and after repeated recogniser errors or a refused microphone. No internet: "Trying
+  again…" with 3 s … 30 s back-off. Saying "pause" is deliberately not a command: in a noisy shop it would misfire.
+- **Screen and beep**: the screen stays on while listening (`KeepAwakePlugin.java`, this app's own Capacitor plugin,
+  `FLAG_KEEP_SCREEN_ON`; Screen Wake Lock in the browser). Each session asks the plugin for `muteRecognizerBeep`
+  (Settings → "Silence it", default): `EXTRA_DICTATE_BEEP=false` plus notification/system volume at 0 for the first
+  750 ms. Whether the Redmi's Google app honours it is not verified; "Keep the beep" turns it off if notification
+  sounds go missing.
+- **Parser**: obligation forms now mean Debit: "kudukkanum / kodukkanum / tharanum / kudukka vendiyathu" (has to give:
+  he owes it); "kattanum" (has to pay) is a weak Debit (it may only state the balance). Fixtures: category
+  `obligation`.
+- **Not possible with this plugin**: one session that stays open across silence. Google's segmented sessions
+  (`EXTRA_SEGMENTED_SESSION`) deliver results through `onSegmentResults`, which the plugin does not implement, so the
+  loop restarts; a word said in the fraction of a second while the recogniser restarts can be lost (the status line
+  then asks for the name or amount again).
+
+Tests: `test/ui.voice-mode.test.ts` (what is ignored, cards, early stop, back-off, idle, totals) and
+`e2e/voice-mode.mjs` (25 flows with the fake recogniser: the two sentences of the brief, noise, balance, new
+customer, Edit both ways, unclear direction, Skip, Undo, two entries in one sentence, two Ramus, Pause through Edit,
+background, no internet, idle, early stop, Tamil, settings, refused microphone; screenshots `vm-*.png`).
 <!-- =================== end Voice entry =================== -->
 
 <!-- =================== Verification status (v2) =================== -->
@@ -305,6 +351,7 @@ Verified here:
 - `npx tsc --noEmit -p .` clean; `npx vitest run` green (unit + reviewer suites, no skipped-as-failing tests);
   `vite build`, `vite build --mode web`, `vite build --mode android` + `cap sync android` + `gradlew assembleDebug`.
 - `node e2e/flows.mjs` (v1 flows, Tamil + English), `node e2e/voice.mjs` (voice flows with the fake recogniser),
+  `node e2e/voice-mode.mjs` (voice mode, the always-listening counter screen, with the fake recogniser),
   `node e2e/web-login.mjs` (web app against `wrangler dev --local`), and `test/sync.integration.test.ts` (two
   engines against `wrangler dev`).
 - Merged manifest permissions: INTERNET, ACCESS_NETWORK_STATE, VIBRATE, RECORD_AUDIO (+ the signature-only
@@ -314,6 +361,8 @@ Not verified on a phone (check these first on the real device, and keep the pape
 
 - Google's speech service for `ta-IN`: how many alternatives it returns, partial-result timing, how it behaves with
   the plugin's `DICTATION_MODE`, the RECORD_AUDIO prompt, and recognition quality for the shop's names.
+- Voice mode on the phone: how long Google keeps each session open in the shop, the gap while it restarts, whether
+  the start beep is really silenced on MIUI / HyperOS, battery and data use over a day, and the screen staying on.
 - The Android SQLite plugin, Tamil keyboards, WhatsApp sharing and the self-test (unchanged from v1, still unverified
   on hardware).
 - Password login from the Android app against a deployed Worker (verified against `wrangler dev` from Node and

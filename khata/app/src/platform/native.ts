@@ -16,6 +16,8 @@
  *   every first use (ensureSecretPrefix).
  * - App's back-button callback is always enabled: with no JS listener and no WebView history the back button
  *   would do nothing, so we keep one permanent listener and minimise the app when no handler consumes it.
+ * - KeepAwake is this app's own plugin (android/app/src/main/java/live/zerox/kadankanakku/KeepAwakePlugin.java,
+ *   registered in MainActivity): set({ on }) adds or clears FLAG_KEEP_SCREEN_ON on the activity window.
  */
 import { App } from '@capacitor/app';
 import { AppLauncher } from '@capacitor/app-launcher';
@@ -26,9 +28,15 @@ import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { Keyboard } from '@capacitor/keyboard';
 import { Network } from '@capacitor/network';
 import { Share } from '@capacitor/share';
+import { registerPlugin } from '@capacitor/core';
 import { SecureStorage, StorageError, StorageErrorType } from '@aparajita/capacitor-secure-storage';
 import { createNativeSpeech } from './speech-native';
 import type { Platform, Speech } from './types';
+
+interface KeepAwakePlugin {
+  set(opts: { on: boolean }): Promise<void>;
+}
+const KeepAwake = registerPlugin<KeepAwakePlugin>('KeepAwake');
 
 const PRIVATE_DIR = 'private';
 const SHARE_DIR = 'share';
@@ -310,6 +318,14 @@ export function createNativePlatform(): Platform {
         await Haptics.impact({ style: ImpactStyle.Light });
       } catch {
         /* haptics are best-effort */
+      }
+    },
+
+    async keepAwake(on) {
+      try {
+        await KeepAwake.set({ on });
+      } catch (e) {
+        console.warn('[platform] keepAwake failed', e);
       }
     },
 

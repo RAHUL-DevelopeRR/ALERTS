@@ -174,3 +174,127 @@
 .sheet-item.voice-new-add { background: var(--brand); color: #fff; border-radius: 12px; margin: 4px 16px 8px; width: calc(100% - 32px); justify-content: center; text-align: center; font-weight: 600; }
 .voice-similar { margin: 8px 20px 0; font-size: 14px; color: var(--muted); }
 .voice-alias-list { margin: 4px 0 8px; padding-left: 20px; font-size: 15px; }
+
+/* ---- voice mode (2.2): the always-listening counter screen (screens/voice-mode.ts) */
+.vm-body { padding-bottom: 16px; }
+.vm-status {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 16px 14px 14px;
+  margin-bottom: 12px;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .06);
+}
+.vm-orb {
+  width: 112px;
+  height: 112px;
+  margin: 6px auto 12px;
+  border-radius: 56px;
+  border: 0;
+  background: var(--brand);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+.vm-orb .ic { width: 50px; height: 50px; }
+.vm-orb.listening::before, .vm-orb.listening::after {
+  content: '';
+  position: absolute;
+  top: -8px; right: -8px; bottom: -8px; left: -8px;
+  border-radius: 64px;
+  border: 4px solid rgba(15, 81, 50, .45);
+  animation: voicePulse 1.4s ease-out infinite;
+}
+.vm-orb.listening::after { animation-delay: .7s; }
+.vm-orb.card { background: var(--amber); color: #3b2a00; }
+.vm-orb.paused { background: var(--settled); }
+.vm-orb.retry { background: var(--amber); color: #3b2a00; animation: vmBlink 1.2s ease-in-out infinite; }
+@keyframes vmBlink { 50% { opacity: .55; } }
+.vm-status.compact { padding: 10px 14px; display: flex; align-items: center; text-align: left; }
+.vm-status.compact .vm-orb { width: 48px; height: 48px; margin: 0 12px 0 0; flex: none; }
+.vm-status.compact .vm-orb .ic { width: 24px; height: 24px; }
+.vm-status.compact .vm-note { display: none; }
+.vm-state { font-size: 20px; font-weight: 800; line-height: 1.3; }
+.vm-status.compact .vm-state { font-size: 16px; font-weight: 700; }
+.vm-live { margin-top: 8px; font-size: 22px; font-weight: 600; min-height: 32px; overflow-wrap: anywhere; }
+.vm-live.placeholder { color: var(--muted); }
+.vm-hint { margin-top: 8px; font-size: 15px; color: var(--muted); }
+.vm-hint b { color: var(--text); }
+.vm-note { margin-top: 10px; padding: 8px 10px; border-radius: 10px; font-size: 15px; background: #eef3f0; overflow-wrap: anywhere; }
+.vm-note.saved { background: var(--got-soft); color: #1b5e20; font-weight: 600; }
+.vm-note.undone { background: var(--warn-bg); color: var(--warn); }
+.vm-note.balance { background: var(--brand-soft); color: var(--brand); font-weight: 700; font-size: 18px; }
+.vm-note.error { background: var(--gave-soft); color: var(--danger); }
+
+.vm-card {
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .12);
+  border-top: 6px solid var(--line);
+}
+.vm-card.gave { border-top-color: var(--gave); }
+.vm-card.got { border-top-color: var(--got); }
+.vm-card.busy { opacity: .7; }
+.vm-heard { color: var(--muted); font-size: 15px; margin-bottom: 8px; overflow-wrap: anywhere; }
+.vm-who { margin-bottom: 6px; }
+.vm-who-main { font-size: 22px; line-height: 1.3; overflow-wrap: anywhere; }
+.vm-who-main .badge { margin-right: 8px; vertical-align: middle; }
+.vm-who-main .sub { font-size: 15px; color: var(--muted); }
+.vm-name { font-weight: 800; }
+.vm-sub-label { display: block; font-size: 14px; color: var(--muted); margin: 6px 0 4px; }
+.vm-pick {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 8px 12px;
+  margin-top: 6px;
+  min-height: 52px;
+}
+.vm-pick.on { border-color: var(--brand); background: var(--brand-soft); }
+.vm-pick-main { flex: 1 1 auto; min-width: 0; }
+.vm-pick-name { display: block; font-weight: 700; font-size: 17px; }
+.vm-pick .sub { display: block; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-pick-bal { margin-left: 8px; }
+.vm-pick-score { margin-left: 8px; font-size: 12px; color: var(--muted); }
+.vm-add-new { display: block; padding-left: 0; }
+.vm-amount { font-size: 46px; font-weight: 800; line-height: 1.15; text-align: center; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.vm-card.gave .vm-amount { color: var(--gave); }
+.vm-card.got .vm-amount { color: var(--got); }
+.vm-words { text-align: center; font-size: 15px; margin-bottom: 8px; }
+.vm-alts { align-items: center; justify-content: center; margin-bottom: 8px; }
+.vm-alts .vm-sub-label { margin: 0 6px 0 4px; }
+.vm-kind button { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 58px; line-height: 1.2; }
+.vm-kind-sub { font-size: 13px; font-weight: 500; opacity: .9; }
+.vm-line { font-size: 15px; margin: 4px 0; }
+.vm-bal { text-align: center; font-size: 17px; font-weight: 700; margin: 6px 0 10px; }
+.vm-actions { display: flex; margin: 8px 0 10px; }
+.vm-actions .btn { flex: 1 1 0; }
+.vm-actions .btn + .btn { margin-left: 10px; }
+
+.vm-log-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.vm-log-head .section-title { margin: 6px 4px 8px; }
+.vm-sum { font-size: 14px; color: var(--muted); margin: 0 4px 8px; }
+.vm-empty { margin: 0 4px; font-size: 15px; }
+.vm-log-item { display: flex; align-items: center; padding: 10px 12px; }
+.vm-log-main { flex: 1 1 auto; min-width: 0; }
+.vm-log-main b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-log-main .sub { display: block; font-size: 13px; color: var(--muted); }
+.vm-log-amt { font-weight: 700; margin-left: 8px; white-space: nowrap; }
+.vm-log-amt.gave { color: var(--gave); }
+.vm-log-amt.got { color: var(--got); }
+.vm-undo { min-width: 0; padding: 6px 10px; margin-left: 4px; }
+.vm-log-item.undone .vm-log-main b, .vm-log-item.undone .vm-log-amt { text-decoration: line-through; opacity: .6; }
+
+/* Home's bottom bar has three destinations since voice mode: icon above the label so Tamil labels fit */
+.bottom-bar .nav-btn { flex-direction: column; font-size: 14px; padding: 4px 2px; }
+.bottom-bar .nav-btn .ic { margin: 0 0 2px; }
+.bottom-bar .nav-btn + .nav-btn { margin-left: 4px; }

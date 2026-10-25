@@ -13,6 +13,8 @@ import * as router from '../router';
 import type { Screen } from '../router';
 import { saveBackupCopy } from '../backup';
 import { micFab } from '../voice/mic-button';
+import { micIcon } from '../voice/icons';
+import { openVoiceMode } from './voice-mode';
 import { loadVoicePrefs } from '../voice/prefs';
 
 type Sort = 'recent' | 'due' | 'oldest';
@@ -273,6 +275,7 @@ export const homeScreen: Screen = async (root, route) => {
     'nav',
     'bottom-bar',
     h('button', { class: 'nav-btn', attrs: { type: 'button', 'data-testid': 'nav-daybook' }, on: { click: () => void router.go('daybook') } }, icon('book'), h('span', { text: t('home.dayBook') })),
+    h('button', { class: 'nav-btn nav-voice', attrs: { type: 'button', 'data-testid': 'nav-voice' }, on: { click: () => void openVoiceMode() } }, micIcon(), h('span', { text: t('vm.nav') })),
     h('button', { class: 'nav-btn', attrs: { type: 'button', 'data-testid': 'nav-settings' }, on: { click: () => void router.go('settings') } }, icon('gear'), h('span', { text: t('home.settings') })),
   );
   const fab = h(

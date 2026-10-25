@@ -61,6 +61,14 @@ similar names below ("Or did you mean"); the same name in another spelling or sc
 still finds the customer. When you pick a customer for a name the app was unsure of, the phone learns it (Settings →
 Voice entry → Learned names). Auto-save only happens when the name matches exactly or was learned.
 
+**Voice mode (2.2.0).** Home → **Voice mode** keeps listening at the counter until you tap Stop. Each sentence that
+sounds like an entry ("Ramu 500 kudukkanum", "Seenu 200 kuduthaaru") shows a card with the customer, Debit/Credit,
+the amount and the balance before → after; **nothing is saved until Approve** (or Edit on the keypad, or Skip), and
+then it listens for the next one. Talk at the counter that is not an entry is ignored. Approved entries collect in
+"This session" with Undo. It pauses by itself in the background, after 15 minutes without an entry (Settings), and
+on Pause; the screen stays on while it listens, so keep the phone on the charger. Details: `app/README.md` → "Voice
+mode".
+
 ## Optional: shop server (backup, several phones, logins, web app)
 
 Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`

@@ -13,6 +13,7 @@
  * In the web build, setting `window.__KK_FAKE_SPEECH__ = [[...alts], ...]` before (or after) the app loads makes
  * platform().speech use this fake (see web.ts). `window.__KK_FAKE_SPEECH_OPTIONS__` = { delayMs, stopDelayMs,
  * available, permission } tunes it; fields are read on every call, so a test can flip them at any time.
+ * `window.__KK_FAKE_SPEECH_CALLS__` then holds the options of every listen() call (read-only for the test).
  */
 import { clampAlternatives, cleanAlternatives, safeCall } from './speech-common';
 import type { Speech, SpeechListenOptions } from './types';
@@ -43,6 +44,8 @@ declare global {
   interface Window {
     __KK_FAKE_SPEECH__?: string[][];
     __KK_FAKE_SPEECH_OPTIONS__?: FakeSpeechOptions;
+    /** The fake's listen() options, oldest first (e2e reads them: quietStart, biasPhrases, how many sessions ran). */
+    __KK_FAKE_SPEECH_CALLS__?: SpeechListenOptions[];
   }
 }
 

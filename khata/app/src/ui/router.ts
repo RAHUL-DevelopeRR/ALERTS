@@ -8,7 +8,7 @@ import { errorText } from './errors';
 import { hideActionToast, toast } from './components/overlay';
 
 export type RouteName =
-  | 'home' | 'customer' | 'customer-edit' | 'entry' | 'daybook' | 'statement' | 'settings' | 'quick';
+  | 'home' | 'customer' | 'customer-edit' | 'entry' | 'daybook' | 'statement' | 'settings' | 'quick' | 'voice-mode';
 
 export interface Route {
   name: RouteName;

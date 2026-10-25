@@ -6,6 +6,7 @@
  * Voice mode (state.voice, see ui/voice): prefilled from what was heard, with a banner that shows the heard words,
  * the amount source and the balance before → after; an unclear direction leaves Debit/Credit unselected and Save
  * disabled until one is tapped. Saving is this same path: nothing from voice is written without the tap.
+ * From voice mode (voice.onDone): Save reports the entry back to voice mode and returns there, without a toast.
  */
 import { addDays, amountInWords, formatINR, formatTyping } from '../../core/ledger';
 import type { EntryView, PayMode } from '../../data/types';
@@ -240,6 +241,12 @@ export const entryScreen: Screen = async (root, route) => {
         voiceDone = true;
         void bumpVoiceStats({ saved: 1, amount_edited: paise !== voice.amount_paise ? 1 : 0, kind_changed: voice.kind && voice.kind !== k ? 1 : 0 });
       }
+      if (voice?.onDone) {
+        // Voice mode: hand the entry back (it is logged there, with Undo) and return to the listening screen.
+        voice.onDone({ entryId: res.entry.id, customerId: c.id, name: c.name, kind: k, amount_paise: paise, balance_paise: res.balance_paise });
+        router.back({ force: true });
+        return;
+      }
       router.back({ force: true });
       if (correct) {
         toast(t('entry.corrected', { bal }));
@@ -310,7 +317,9 @@ export const entryScreen: Screen = async (root, route) => {
   const leaveVoice = (): void => {
     if (!voice || voiceDone) return;
     voiceDone = true;
-    void bumpVoiceStats({ cancelled: 1 });
+    // Voice mode puts its card back (and counts a skip itself); elsewhere the prefill is dropped here.
+    if (voice.onDone) voice.onDone(null);
+    else void bumpVoiceStats({ cancelled: 1 });
     if (voice.next) setTimeout(voice.next, 0);
   };
   // Back with a NEW amount typed: ask before throwing it away. Correction mode backs out freely (nothing changes);

@@ -24,6 +24,7 @@ import { quickScreen } from './ui/screens/quick';
 import { stepUpDialog } from './ui/screens/login';
 import { settingsScreen } from './ui/screens/settings';
 import { statementScreen } from './ui/screens/statement';
+import { voiceModeScreen } from './ui/screens/voice-mode';
 import { APP_VERSION } from './ui/version';
 import { webPrelude } from './ui/web/boot';
 import { isWebApp } from './ui/web/flag';
@@ -84,6 +85,7 @@ function registerScreens(): void {
   router.registerScreen('statement', statementScreen);
   router.registerScreen('settings', settingsScreen);
   router.registerScreen('quick', quickScreen);
+  router.registerScreen('voice-mode', voiceModeScreen);
 }
 
 /** Back: gate, then the top dialog/sheet, then the screen stack. At the root it is NOT consumed, so the platform

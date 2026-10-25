@@ -320,6 +320,14 @@ export const CUES: Cue[] = [
     'குடுத்தேன்', 'கொடுத்தேன்', 'குடுத்தோம்', 'கொடுத்தோம்', 'குடுத்திருக்கேன்', 'குடுத்துட்டேன்', 'கொடுத்துட்டோம்', 'குடுத்துருக்கேன்',
     'kuduthen', 'koduthen', 'kuduthom', 'koduthom', 'kuduthirukken', 'kuduthutten', 'kuduthuttom', 'kudutthen',
   ] },
+  // obligation "has to give": "Ramu 500 kudukkanum" = Ramu has to give 500, he owes it -> GIVE (Debit); with -kku
+  // ("Ramukku 500 kudukkanum", to be given to Ramu) it is goods going out to him -> GIVE as well. tharanum likewise.
+  { label: 'kudukkanum', type: 'verb', dir: G, forms: [
+    'குடுக்கணும்', 'கொடுக்கணும்', 'குடுக்கனும்', 'கொடுக்கனும்', 'தரணும்', 'தரனும்', 'குடுக்கவேண்டும்', 'கொடுக்கவேண்டும்',
+    'குடுக்கவேண்டியது', 'கொடுக்கவேண்டியது', 'தரவேண்டியது',
+    'kudukkanum', 'kodukkanum', 'kudukkonum', 'kodukkonum', 'kudukkanam', 'kudukanum', 'kodukanum', 'kudukkaanum',
+    'tharanum', 'tharonum', 'taranum', 'kudukkavendiyathu', 'kodukkavendiyathu', 'tharavendiyathu', 'kudukkavenum',
+  ] },
   // speaker "I/we sent" (the shop sent money to the customer) -> GIVE
   { label: 'anuppinen', type: 'verb', dir: G, forms: ['அனுப்பினேன்', 'அனுப்பிட்டேன்', 'அனுப்பினோம்', 'anuppinen', 'anuppitten', 'anuppiten', 'anuppinom'] },
   // raw only: 'parru' / பாரு / 'paaru' fold to 'paru' and must stay out of the lexicon (finding 21)
@@ -363,6 +371,10 @@ export const CUES: Cue[] = [
   { label: 'kadan', type: 'noun', dir: G, en: true, forms: ['loan', 'udhaar', 'owes', 'owe'] },
   { label: 'baaki', type: 'baaki', dir: G, forms: ['பாக்கி', 'baaki', 'paakki', 'baki', 'bakki', 'paaki'] },
   { label: 'baaki', type: 'baaki', dir: G, en: true, forms: ['balance', 'due', 'pending'] },
+  // "Ramu 500 kattanum" (has to pay): he owes it, but it may only be stating the balance -> GIVE, weakest
+  { label: 'kattanum', type: 'baaki', dir: G, forms: ['கட்டணும்', 'கட்டனும்', 'kattanum', 'kattonum', 'kattanam'] },
+  // "venum / vendiyathu" (needed, has to be): with kudukka ("kudukka vendiyathu") an obligation to give -> GIVE (weak)
+  { label: 'venum', type: 'noun', dir: G, forms: ['வேணும்', 'வேண்டும்', 'வேண்டியது', 'venum', 'vendum', 'vendiyathu', 'vendiyadhu'] },
 
   // ---- bare impersonal kuduthaachu: shop setting
   { label: 'kuduthaachu', type: 'bare', dir: null, forms: [
@@ -370,7 +382,7 @@ export const CUES: Cue[] = [
     'kuduthaachu', 'koduthaachu', 'kuduthachu', 'koduthachu', 'kudutthaachu', 'kuduthaach', 'kuduthathu', 'kuduthadhu',
     'kuduthuttaachu', 'குடுத்திருச்சு', 'kuduthiruchu',
   ] },
-  { label: 'kudu', type: 'imp', dir: null, forms: ['குடு', 'கொடு', 'குடுங்க', 'கொடுங்க', 'kudu', 'kodu', 'kudunga', 'kodunga', 'kuduthudu'] },
+  { label: 'kudu', type: 'imp', dir: null, forms: ['குடு', 'கொடு', 'குடுங்க', 'கொடுங்க', 'குடுக்க', 'கொடுக்க', 'kudu', 'kodu', 'kudunga', 'kodunga', 'kuduthudu', 'kudukka', 'kodukka'] },
   // ---- light verbs / account
   { label: 'ezhuthu', type: 'light', dir: null, forms: [
     'எழுது', 'எழுதுங்க', 'எழுதிக்கோ', 'எழுதிடு', 'எழுதிக்கங்க', 'போடு', 'போடுங்க', 'போட்டுரு', 'போட்டுடு', 'வை', 'வைங்க',
@@ -410,6 +422,10 @@ const CUE_PATTERNS: { re: RegExp; label: string; type: CueType; dir: 'GIVE' | 'R
   { re: /^(kutut|kotut)(u?t|it|iruk|uruk)?(en|om|ten|tom)$/, label: 'kuduthen', type: 'verb', dir: G },
   { re: /^(kutut|kotut)(u?t|it|iruk|uruk)?(an|al|ar|aru|anka|ankal|a|apla|anu)$/, label: 'kuduthaan', type: 'kudu3p', dir: R },
   { re: /^(kutuk|kotuk)(al|ala|alai|ale)$/, label: 'negated', type: 'negated', dir: null },
+  // obligation: kudukkanum / kodukkonum / tharanum, kudukka(v)vendiyathu / -venum
+  { re: /^(kutuk|kotuk|tar)(a|o)n(u|a)m$/, label: 'kudukkanum', type: 'verb', dir: G },
+  { re: /^(kutuk|kotuk|tar)a?ven(tiyatu|tum|um)$/, label: 'kudukkanum', type: 'verb', dir: G },
+  { re: /^kat(a|o)n(u|a)m$/, label: 'kattanum', type: 'baaki', dir: G },
   { re: /^vank(in|un|i|it|ikit|ikitu|iruk|iyiruk)(en|om|ten|tom)$/, label: 'vaanginen', type: 'verb', dir: R },
   { re: /^vank(in|un|it|ikit|iruk|iyiruk)(an|al|ar|aru|anka|ankal|a|anu)$/, label: 'vaanginaan', type: 'verb', dir: G },
   { re: /^vank(itu|ikitu)$/, label: 'vaanginaan', type: 'verb', dir: G },

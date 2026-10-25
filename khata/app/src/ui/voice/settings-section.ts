@@ -84,6 +84,43 @@ function autoChoice(p: VoicePrefs): HTMLElement[] {
   return [choice(true, t('voice.autoOn'), t('voice.autoOnSub')), choice(false, t('voice.autoOff'), t('voice.autoOffSub'))];
 }
 
+/** Voice mode (always listening): when it pauses by itself, and whether the recogniser's restart beep is silenced. */
+function modeBlock(p: VoicePrefs): HTMLElement {
+  const save = (patch: Partial<VoicePrefs>): void => {
+    void saveVoicePrefs(patch).then(() => router.rerender(), (e) => toast(errorText(e), { error: true }));
+  };
+  const idleSeg = h(
+    'div',
+    'seg',
+    ([15, 60, 0] as const).map((m) =>
+      h('button', {
+        class: p.mode_idle === m ? 'on' : '',
+        attrs: { type: 'button', 'aria-pressed': p.mode_idle === m ? 'true' : 'false', 'data-testid': `vm-idle-${m}` },
+        text: m === 15 ? t('vm.idle15') : m === 60 ? t('vm.idle60') : t('vm.idle0'),
+        on: { click: () => p.mode_idle !== m && save({ mode_idle: m }) },
+      }),
+    ),
+  );
+  const quiet = (on: boolean, label: string, sub: string): HTMLElement =>
+    h(
+      'button',
+      { class: `voice-choice${p.mode_quiet === on ? ' on' : ''}`, attrs: { type: 'button', 'aria-pressed': p.mode_quiet === on ? 'true' : 'false', 'data-testid': on ? 'vm-quiet-on' : 'vm-quiet-off' }, on: { click: () => p.mode_quiet !== on && save({ mode_quiet: on }) } },
+      h('span', { text: label }),
+      h('span', { class: 'sub', text: sub }),
+    );
+  return h(
+    'div',
+    { attrs: { 'data-testid': 'vm-settings' } },
+    h('span', { class: 'field-label', text: t('vm.settings') }),
+    h('p', { class: 'input-help', text: t('vm.settingsHelp') }),
+    h('span', { class: 'field-label', style: { marginTop: '10px' }, text: t('vm.idleQ') }),
+    idleSeg,
+    h('span', { class: 'field-label', style: { marginTop: '10px' }, text: t('vm.quietQ') }),
+    quiet(true, t('vm.quietOn'), t('vm.quietOnSub')),
+    quiet(false, t('vm.quietOff'), t('vm.quietOffSub')),
+  );
+}
+
 function holdChoice(p: VoicePrefs): HTMLElement[] {
   const pick = (hold: boolean): void => {
     if (hold === p.hold) return;
@@ -244,6 +281,7 @@ export async function voiceSettingsSection(): Promise<HTMLElement> {
             block(h('span', { class: 'field-label', text: t('voice.lang') }), langSeg(p)),
             block(h('span', { class: 'field-label', text: t('voice.holdQ') }), holdChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.autoQ') }), autoChoice(p)),
+            block(modeBlock(p)),
             block(h('span', { class: 'field-label', text: t('voice.bareQ') }), bareChoice(p)),
             block(h('span', { class: 'field-label', text: t('voice.try') }), tryBlock(p)),
             block(aliasBlock(aliases, names)),

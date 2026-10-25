@@ -310,6 +310,7 @@ export function createNativeSpeech(): Speech {
           partialResults: true,
           popup: false,
           ...(contextualStrings.length ? { contextualStrings } : {}),
+          ...(opts.quietStart ? { muteRecognizerBeep: true } : {}),
         });
         if (!s.settled) s.timers.push(setTimeout(() => void stop(), listenTimeout(opts.maxMs)));
         // stop() during start() (a hold released at once): the plugin may have had nothing to stop yet, so ask again.

@@ -43,6 +43,11 @@ export interface Platform {
   exitApp(): Promise<void>;
   /** Speech-to-text for voice entry (Android: Google SpeechRecognizer via plugin; web: Web Speech API). */
   readonly speech: Speech;
+  /**
+   * Keep the screen on (voice mode listens at the counter; a dark screen would end it). Android: the window's
+   * FLAG_KEEP_SCREEN_ON (local KeepAwake plugin); browser: the Screen Wake Lock API where available. Best effort.
+   */
+  keepAwake?(on: boolean): Promise<void>;
 }
 
 /** One recognition update. Kept for UI code that wants to model partial vs final results explicitly. */
@@ -75,6 +80,12 @@ export interface SpeechListenOptions {
    * still caps it. When the press turns out to be a tap, the UI calls setHeld(false) and the timer applies again.
    */
   held?: boolean;
+  /**
+   * Voice mode restarts the recogniser after every sentence: ask it to start without its beep (Android: the
+   * plugin's muteRecognizerBeep, which also turns the notification/system volume down for the first 750 ms; how
+   * well it works depends on the phone). Ignored elsewhere.
+   */
+  quietStart?: boolean;
 }
 
 /**
