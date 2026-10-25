@@ -74,6 +74,11 @@ mode".
 
 ## Optional: shop server (backup, several phones, logins, web app)
 
+**One command (recommended): `GO-LIVE.md`.** `./khata/tools/go-live.sh` deploys the server to the shop's Cloudflare
+account, creates the owner's login and builds the APK with the server inside, from a few environment variables
+(Cloudflare token and account id, owner user id and password, the signing key). Every phone then only signs in with
+a user id and password. The manual steps below do the same by hand.
+
 Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `./khata/tools/deploy-server.sh`
 after `cd khata/api && npm ci && npx wrangler login`; it applies the D1 migrations, builds and uploads the web app
 with the Worker, and prints the server address, the setup key and the web app URL; details in `api/README.md`.

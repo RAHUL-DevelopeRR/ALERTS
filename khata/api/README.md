@@ -70,6 +70,9 @@ Browsers accept the `Secure` session cookie on `http://localhost`.
 
 Use the shop's Cloudflare account (created with the shop's email; the developer is a member).
 
+**Everything at once:** `khata/GO-LIVE.md` (`./khata/tools/go-live.sh`: this deploy, the owner's login through
+`tools/create-owner.mjs`, and the APK with the server built in).
+
 **One command (recommended).** From the repository root, after signing in once with `cd khata/api && npm ci && npx wrangler login`
 (or with `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set; token permissions: Workers Scripts Edit, D1 Edit,
 Account Settings Read):
