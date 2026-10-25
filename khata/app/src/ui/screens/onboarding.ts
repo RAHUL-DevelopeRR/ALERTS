@@ -8,11 +8,11 @@
  */
 import { setLang, t } from '../../i18n';
 import { app, refreshSettings } from '../app';
-import { button, h } from '../components/dom';
+import { h } from '../components/dom';
 import { toast } from '../components/overlay';
 import { errorText } from '../errors';
 import { askNewPin, closeGate, logo, setGateBack, showGate } from '../gate';
-import { BUILT_IN_SERVER, serverHost } from '../shop-server';
+import { serverField, serverHost } from '../shop-server';
 import { signInForm } from './login';
 
 function steps(n: number): HTMLElement {
@@ -60,27 +60,8 @@ export function runOnboarding(): Promise<void> {
     };
 
     const stepJoin = (): void => {
-      let editServer = !BUILT_IN_SERVER;
-      const url = h('input', {
-        class: 'input',
-        attrs: { type: 'url', inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: t('set.serverUrlPh'), 'data-testid': 'onb-srv' },
-      });
-      url.value = BUILT_IN_SERVER;
-      const urlField = h('label', 'field', h('span', { class: 'field-label', text: t('set.serverUrl') }), url);
-      const serverLine = h(
-        'p',
-        { class: 'input-help onb-server-line', attrs: { 'data-testid': 'onb-srv-line' } },
-        t('onb.serverLine', { host: serverHost(BUILT_IN_SERVER) }),
-        ' ',
-        button(t('onb.serverChange'), () => {
-          editServer = true;
-          serverLine.classList.add('hidden');
-          urlField.classList.remove('hidden');
-          url.focus();
-        }, 'link', { 'data-testid': 'onb-srv-change' }),
-      );
-      urlField.classList.toggle('hidden', !editServer);
-      serverLine.classList.toggle('hidden', editServer);
+      // Built into the shop's APK: one line instead of an address to type (shop-server.ts).
+      const { input: url, el: serverEl } = serverField('onb-srv');
       const devName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 60, autocomplete: 'off', 'data-testid': 'onb-device' } });
       void app.platform.deviceModel().then((m) => { if (!devName.value) devName.value = m; }).catch(() => undefined);
       const form = signInForm({
@@ -100,7 +81,7 @@ export function runOnboarding(): Promise<void> {
         'onb',
         steps(2),
         h('div', 'gate-head', h('h2', { text: t('onb.joinTitle') }), h('p', { text: t('onb.joinHelp') })),
-        h('div', 'card', serverLine, urlField, form),
+        h('div', 'card', serverEl, form),
       );
       setGateBack(() => {
         stepUse();

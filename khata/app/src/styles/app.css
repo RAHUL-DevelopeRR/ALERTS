@@ -173,6 +173,9 @@ h1, h2, h3, p { margin: 0; }
 .btn-block { display: flex; width: 100%; }
 .btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn-danger-outline { background: var(--card); border-color: var(--danger); color: var(--danger); }
+.erase-zone { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.erase-zone .input-help { margin-bottom: 10px; }
 .btn-gave { background: var(--gave); border-color: var(--gave); color: #fff; }
 .btn-got { background: var(--got); border-color: var(--got); color: #fff; }
 .btn-plain { background: var(--card); }

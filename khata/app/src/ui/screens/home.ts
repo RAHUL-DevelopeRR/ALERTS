@@ -98,11 +98,10 @@ export const homeScreen: Screen = async (root, route) => {
     delete route.params.fresh;
   }
   const pill = syncPill();
-  // Top right: send this phone's entries and get the other phones' now, without waiting for the 20-s poll.
-  const syncBtn = syncButton();
   const { body } = shell(root, {
     title: s.shop_name || t('app.name'),
-    actions: [syncBtn.el],
+    // Top right: send this phone's entries and get the other phones' now, without waiting for the 20-s poll.
+    actions: [syncButton()],
     below: pill.el,
   });
   root.classList.add('home');
@@ -292,8 +291,5 @@ export const homeScreen: Screen = async (root, route) => {
   );
   root.append(micFab({}), fab);
   root.appendChild(bar);
-  return () => {
-    pill.dispose();
-    syncBtn.dispose();
-  };
+  return () => pill.dispose();
 };

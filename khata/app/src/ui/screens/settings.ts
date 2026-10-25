@@ -1,7 +1,7 @@
 /** Settings: shop, language, security, safety, backup, shop server, needs attention, privacy, about. */
 import { formatINR } from '../../core/ledger';
 import { selfTest } from '../../data/index';
-import type { Settings } from '../../data/types';
+import type { BackupFile, Settings } from '../../data/types';
 import type { Role } from '../../data/types';
 import type { AuthEvent, UserInfo } from '../../../../shared/protocol';
 import { hasKey, setLang, t } from '../../i18n';
@@ -9,18 +9,19 @@ import { afterWrite, app, refreshSettings } from '../app';
 import { endWebSession } from '../web/session';
 import { isWebApp } from '../web/flag';
 import { askNewPassword, passwordField, sessionEndsText, signOutFlow, usernameField } from './login';
-import { listLocalCopies, restoreFromFile, restoreLocalCopy, saveBackupCopy } from '../backup';
+import { keepCopyBeforeErase, listLocalCopies, restoreFromFile, restoreLocalCopy, saveBackupCopy } from '../backup';
 import { add, button, clear, h, type Child } from '../components/dom';
 import { actionSheet, alertDialog, confirmDialog, dialog, toast } from '../components/overlay';
 import { shell } from '../components/shell';
 import { pillContent } from '../components/sync-pill';
 import { errorText, reasonText } from '../errors';
 import { when, today } from '../format';
-import { askNewPin } from '../gate';
+import { askNewPin, confirmPin } from '../gate';
+import { homeState } from './home';
 import * as router from '../router';
 import type { Screen } from '../router';
 import { APP_VERSION } from '../version';
-import { BUILT_IN_SERVER } from '../shop-server';
+import { BUILT_IN_SERVER, serverField } from '../shop-server';
 import { checkNewPassword, normalizeUsername } from '../../sync/password';
 import { voiceSettingsSection } from '../voice/settings-section';
 
@@ -216,8 +217,59 @@ function backupSection(s: Settings): HTMLElement {
       button(t('set.restore'), () => fileIn.click(), 'btn btn-block', { 'data-testid': 'restore' }),
       button(t('set.restoreDaily'), () => void pickLocalCopy(), 'btn btn-block', { 'data-testid': 'restore-daily' }),
       fileIn,
+      // A phone on the shop server is cleared by signing out (Settings → Account), never from here.
+      !s.paired && !isWebApp()
+        ? h(
+            'div',
+            { class: 'erase-zone' },
+            h('p', { class: 'input-help', text: t('set.eraseHelp') }),
+            button(t('set.erase'), () => void eraseEverything(s), 'btn btn-block btn-danger-outline', { 'data-testid': 'erase-all' }),
+          )
+        : null,
     ),
   );
+}
+
+/**
+ * Settings → Backup → Erase all entries and start fresh (a phone not connected to a shop server): say what goes,
+ * the PIN if one is set, a private copy first (Restore a daily copy → "Before erasing" undoes it), then erase.
+ */
+async function eraseEverything(s: Settings): Promise<void> {
+  let current: BackupFile;
+  try {
+    current = await app.repo.exportBackup();
+  } catch (e) {
+    toast(errorText(e), { error: true });
+    return;
+  }
+  if (current.customers.length === 0 && current.entries.length === 0) {
+    toast(t('set.eraseNothing'));
+    return;
+  }
+  const ok = await confirmDialog({
+    title: t('set.eraseTitle'),
+    message: t('set.eraseConfirm', { c: current.customers.length, e: current.entries.length }),
+    ok: t('set.eraseYes'),
+    danger: true,
+  });
+  if (!ok) return;
+  if (s.pin_set && !(await confirmPin(t('set.erasePin'), (pin) => app.repo.verifyPin(pin)))) return;
+  try {
+    await keepCopyBeforeErase(current);
+  } catch (e) {
+    console.error('[settings] copy before erase failed', e);
+    toast(t('set.safetyFailed'), { error: true });
+    return;
+  }
+  try {
+    const r = await app.repo.eraseLedger();
+    homeState.q = '';
+    await refreshSettings();
+    toast(t('set.erased', { c: r.customers, e: r.entries }), { ms: 6_000 });
+    void router.go('home');
+  } catch (e) {
+    toast(errorText(e), { error: true });
+  }
 }
 
 // ------------------------------------------------------------------ shop server
@@ -225,12 +277,12 @@ function backupSection(s: Settings): HTMLElement {
 function connectForm(s: Settings): HTMLElement {
   // User id + password is the usual way into the shop; a code is the fallback; first-time setup is the owner's once.
   let mode: 'code' | 'login' | 'setup' = 'login';
-  const url = h('input', { class: 'input', attrs: { type: 'url', inputmode: 'url', autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', placeholder: t('set.serverUrlPh'), 'data-testid': 'srv-url' } });
+  // Built into the shop's APK: one line, no address to type (shop-server.ts).
+  const { input: url, el: urlEl } = serverField('srv-url', s.server_url ?? BUILT_IN_SERVER);
   const devName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 60, autocomplete: 'off', 'data-testid': 'srv-device' } });
   const code = h('input', { class: 'input', attrs: { type: 'text', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', 'data-testid': 'srv-code' } });
   const key = h('input', { class: 'input', attrs: { type: 'password', autocomplete: 'off', 'data-testid': 'srv-key' } });
   const shopName = h('input', { class: 'input', attrs: { type: 'text', maxlength: 100, 'data-testid': 'srv-shop' } });
-  url.value = s.server_url ?? BUILT_IN_SERVER;
   shopName.value = s.shop_name;
   devName.value = s.device_name ?? '';
   if (!devName.value) void app.platform.deviceModel().then((m) => { if (!devName.value) devName.value = m; }).catch(() => undefined);
@@ -312,7 +364,7 @@ function connectForm(s: Settings): HTMLElement {
     'div',
     null,
     seg,
-    h('label', 'field', h('span', { class: 'field-label', text: t('set.serverUrl') }), url),
+    urlEl,
     codeField,
     user.wrap,
     pw.wrap,
@@ -683,7 +735,7 @@ async function devicesBlock(s: Settings): Promise<HTMLElement> {
   return box;
 }
 
-async function serverSection(s: Settings): Promise<HTMLElement> {
+async function serverSection(s: Settings, openForm = false): Promise<HTMLElement> {
   const web = isWebApp();
   if (!s.paired) {
     if (web) return h('section', { attrs: { id: 'sec-sync' } });
@@ -692,11 +744,12 @@ async function serverSection(s: Settings): Promise<HTMLElement> {
       open.remove();
       formHost.appendChild(connectForm(s));
     }, 'btn btn-block', { 'data-testid': 'srv-open' });
+    if (openForm) formHost.appendChild(connectForm(s));
     return h(
       'section',
       { attrs: { id: 'sec-sync' } },
       h('h2', { class: 'section-title', text: t('set.sync') }),
-      h('div', 'list', block(h('p', { class: 'input-help', style: { marginBottom: '10px' }, text: t('set.syncHelp') }), open, formHost)),
+      h('div', 'list', block(h('p', { class: 'input-help', style: { marginBottom: '10px' }, text: t('set.syncHelp') }), openForm ? null : open, formHost)),
     );
   }
   const st = app.sync.status();
@@ -857,7 +910,10 @@ async function aboutSection(): Promise<HTMLElement> {
 export const settingsScreen: Screen = async (root, route) => {
   const s = await refreshSettings();
   const { body } = shell(root, { title: t('set.title'), back: true });
-  const [server, attention, about] = await Promise.all([serverSection(s), attentionSection(), aboutSection()]);
+  // Home's Sync button on a phone that is not connected opens the sign-in form directly (connect=1).
+  const openConnect = route.params.connect === '1';
+  delete route.params.connect;
+  const [server, attention, about] = await Promise.all([serverSection(s, openConnect), attentionSection(), aboutSection()]);
   const web = isWebApp();
   add(
     body,
@@ -874,6 +930,9 @@ export const settingsScreen: Screen = async (root, route) => {
   );
   if (route.params.section === 'sync') {
     delete route.params.section;
-    setTimeout(() => document.getElementById('sec-sync')?.scrollIntoView({ block: 'start' }), 0);
+    setTimeout(() => {
+      document.getElementById('sec-sync')?.scrollIntoView({ block: 'start' });
+      if (openConnect) document.querySelector<HTMLInputElement>('[data-testid="srv-user"]')?.focus({ preventScroll: true });
+    }, 0);
   }
 };

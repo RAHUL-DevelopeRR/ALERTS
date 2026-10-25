@@ -1,6 +1,7 @@
 /**
  * Backup copy (share sheet), restore from file, the rolling daily private snapshots (newest 7 kept), a private
- * safety copy before every restore, and restoring any of those private copies (Settings → Backup).
+ * safety copy before every restore and before "Erase all entries", and restoring any of those private copies
+ * (Settings → Backup).
  */
 import { bizDateIST, formatDay, todayIST } from '../core/ledger';
 import { validateBackup } from '../data/index';
@@ -16,8 +17,11 @@ export const SNAPSHOTS_KEPT = 7;
 /** Safety copy written just before a restore replaces the data: pre-restore-<epoch ms>.json, newest 3 kept. */
 export const PRE_RESTORE_PREFIX = 'pre-restore-';
 const PRE_RESTORE_KEPT = 3;
+/** The same, just before "Erase all entries": pre-erase-<epoch ms>.json, newest 3 kept. */
+export const PRE_ERASE_PREFIX = 'pre-erase-';
 const SNAPSHOT_RE = /^snapshot-(\d{4}-\d{2}-\d{2})\.json$/;
 const PRE_RESTORE_RE = /^pre-restore-(\d+)\.json$/;
+const PRE_ERASE_RE = /^pre-erase-(\d+)\.json$/;
 
 export async function saveBackupCopy(): Promise<boolean> {
   try {
@@ -76,17 +80,20 @@ function parseBackup(text: string): BackupFile | null {
 }
 
 /** Keep a private copy of what is on the phone right now, before a restore replaces it. Throws on failure. */
-async function writeSafetyCopy(current: BackupFile): Promise<void> {
+async function writeSafetyCopy(current: BackupFile, prefix = PRE_RESTORE_PREFIX): Promise<void> {
   if (current.customers.length === 0 && current.entries.length === 0) return; // nothing to lose
-  await app.platform.writePrivateFile(`${PRE_RESTORE_PREFIX}${Date.now()}.json`, JSON.stringify(current));
-  const names = (await app.platform.listPrivateFiles(PRE_RESTORE_PREFIX)).filter((n) => PRE_RESTORE_RE.test(n)).sort(byStamp);
+  const re = prefix === PRE_ERASE_PREFIX ? PRE_ERASE_RE : PRE_RESTORE_RE;
+  await app.platform.writePrivateFile(`${prefix}${Date.now()}.json`, JSON.stringify(current));
+  const byStamp = (a: string, b: string): number => Number(re.exec(a)?.[1] ?? 0) - Number(re.exec(b)?.[1] ?? 0);
+  const names = (await app.platform.listPrivateFiles(prefix)).filter((n) => re.test(n)).sort(byStamp);
   for (const old of names.slice(0, Math.max(0, names.length - PRE_RESTORE_KEPT))) {
     await app.platform.deletePrivateFile(old).catch((e) => console.warn('[backup] delete safety copy failed', old, e));
   }
 }
 
-function byStamp(a: string, b: string): number {
-  return Number(PRE_RESTORE_RE.exec(a)?.[1] ?? 0) - Number(PRE_RESTORE_RE.exec(b)?.[1] ?? 0);
+/** The copy kept just before "Erase all entries" (Restore a daily copy → "Before erasing" brings it back). Throws on failure. */
+export function keepCopyBeforeErase(current: BackupFile): Promise<void> {
+  return writeSafetyCopy(current, PRE_ERASE_PREFIX);
 }
 
 /**
@@ -154,9 +161,10 @@ export interface LocalCopy {
 
 /** The private copies kept on this phone (daily snapshots and pre-restore safety copies), newest first. */
 export async function listLocalCopies(): Promise<LocalCopy[]> {
-  const [snaps, pre] = await Promise.all([
+  const [snaps, pre, erased] = await Promise.all([
     app.platform.listPrivateFiles(SNAPSHOT_PREFIX),
     app.platform.listPrivateFiles(PRE_RESTORE_PREFIX),
+    app.platform.listPrivateFiles(PRE_ERASE_PREFIX),
   ]);
   const out: { name: string; label: string; at: number }[] = [];
   for (const n of snaps) {
@@ -168,6 +176,13 @@ export async function listLocalCopies(): Promise<LocalCopy[]> {
     if (m) {
       const at = Number(m[1]);
       out.push({ name: n, label: t('set.preRestoreCopy', { when: when(new Date(at).toISOString()) }), at });
+    }
+  }
+  for (const n of erased) {
+    const m = PRE_ERASE_RE.exec(n);
+    if (m) {
+      const at = Number(m[1]);
+      out.push({ name: n, label: t('set.preEraseCopy', { when: when(new Date(at).toISOString()) }), at });
     }
   }
   return out.sort((a, b) => b.at - a.at).map(({ name, label }) => ({ name, label }));

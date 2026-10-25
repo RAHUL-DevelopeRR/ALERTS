@@ -1508,6 +1508,26 @@ export class SqlRepo implements Repo {
     this.invalidateBatches();
   }
 
+  async eraseLedger(): Promise<{ customers: number; entries: number }> {
+    const r = await this.db.transaction(async (tx) => {
+      if (await metaGet(tx, 'server_url')) throw new RepoError('ERASE_CONNECTED');
+      const [c] = await tx.query<{ n: number }>('SELECT COUNT(*) AS n FROM customers');
+      const [e] = await tx.query<{ n: number }>('SELECT COUNT(*) AS n FROM entries');
+      await tx.run('DELETE FROM outbox');
+      await tx.run('DELETE FROM entries');
+      await tx.run('DELETE FROM customers');
+      await tx.run('DELETE FROM devices');
+      for (const k of ['voice_aliases', 'voice_stats', 'last_pairing', 'spare_start', 'spare_end'] as MetaKey[]) {
+        await metaSet(tx, k, null);
+      }
+      await metaSet(tx, 'code_next', '1');
+      await metaSet(tx, 'code_end', String(PROVISIONAL_CODE_END));
+      return { customers: Number(c?.n ?? 0), entries: Number(e?.n ?? 0) };
+    });
+    this.invalidateBatches();
+    return r;
+  }
+
   // ---------------------------------------------------------------- backup
 
   private async exportTx(tx: DbExec): Promise<BackupFile> {

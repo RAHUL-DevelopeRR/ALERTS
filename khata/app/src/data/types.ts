@@ -279,6 +279,13 @@ export interface Repo {
   setDevices(devices: DeviceInfo[]): Promise<void>;
   /** Forget pairing (after 401 revoked). If `wipe`, delete all customers/entries/outbox too. */
   unpair(wipe: boolean): Promise<void>;
+  /**
+   * Start a fresh book on a phone that is NOT connected to a shop server: every customer, entry and outbox row is
+   * deleted, customer numbers start again at C-0001, and the voice names learned for those customers and the voice
+   * accuracy log go too. Shop name, UPI id, language, PIN and settings stay. ERASE_CONNECTED on a connected phone
+   * (sign out and remove the ledger instead). Returns what was deleted.
+   */
+  eraseLedger(): Promise<{ customers: number; entries: number }>;
 
   // ---- backup
   exportBackup(): Promise<BackupFile>;

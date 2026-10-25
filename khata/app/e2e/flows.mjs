@@ -457,6 +457,53 @@ async function main() {
     check((await page.locator('.gate').count()) === 0, 'unlocked to home');
     check((await text('.summary-amt')) === '₹300', 'home total ₹300 (Kamala 150 + Murugan 150)');
 
+    console.log('Sync button on a phone with no shop server: says so and opens the sign-in form');
+    const syncBox = await tid('home-sync').boundingBox();
+    check(!!syncBox && syncBox.x > 393 / 2 && syncBox.y < 120, 'the Sync button is in the top-right corner even before connecting');
+    await tid('home-sync').click();
+    await page.locator('.dialog').waitFor();
+    check((await text('.dialog-title')) === 'Not connected to the shop server', 'tapping it says the phone is not connected');
+    await shot('home-sync-not-connected-en');
+    await page.locator('.dialog .btn-primary').click();
+    await page.locator('.screen[data-route="settings"]').waitFor();
+    await tid('srv-user').waitFor();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('data-testid') === 'srv-user', null, { timeout: 5000 });
+    check(true, 'Sign in opens Settings → Shop server with the user id field ready');
+    check(await tid('srv-url').isVisible(), 'this build has no server built in, so the address field shows (a shop build hides it)');
+    check((await tid('srv-open').count()) === 0, 'the form is open at once (no extra "Connect to shop server" tap)');
+    await shot('settings-sign-in-from-sync-en');
+
+    console.log('Erase all entries and start fresh: PIN, a copy kept, then brought back');
+    await page.evaluate(() => document.querySelector('[data-testid="erase-all"]')?.scrollIntoView({ block: 'center' }));
+    await shot('settings-erase-en');
+    await tid('erase-all').click();
+    await page.locator('.dialog').waitFor();
+    const eraseMsg = await text('.dialog .pre');
+    check(/^\d+ customers and \d+ entries will be deleted from this phone\. Customer numbers start again at C-0001\./.test(eraseMsg), 'the confirm says what goes and that numbers restart');
+    await page.locator('.dialog .btn-danger').click();
+    await page.locator('.gate.pin-gate').waitFor();
+    check((await text('.gate h2')) === 'Enter the PIN to erase', 'the PIN is asked before erasing');
+    await pin('1234');
+    const erasedMsg = await toast();
+    check(/^Erased \d+ customers and \d+ entries\. A copy was kept/.test(erasedMsg), erasedMsg);
+    await page.locator('.screen[data-route="home"]').waitFor();
+    check((await page.locator('[data-testid="cust-row"]').count()) === 0 && (await text('.summary-amt')) === '₹0', 'Home is empty after erasing');
+    await shot('home-after-erase-en');
+    await tid('add-customer').click();
+    await tid('cust-name').fill('Seenu');
+    await tid('cust-save').click();
+    await page.locator('.screen[data-route="customer"]').waitFor();
+    check((await page.locator('.screen[data-route="customer"]').innerText()).includes('C-0001'), 'the first new customer is C-0001 again');
+    await home();
+    await tid('nav-settings').click();
+    await tid('restore-daily').click();
+    await page.locator('.sheet').waitFor();
+    await page.locator('.sheet-item', { hasText: 'Before erasing' }).first().click();
+    await page.locator('.dialog .btn-danger').click();
+    check((await toast()).startsWith('Restored '), 'the copy kept before erasing is restored');
+    await home();
+    check((await text('.summary-amt')) === '₹300', 'everything is back: home total ₹300');
+
     check(consoleErrors.length === 0, `no console errors ${consoleErrors.join(' | ')}`);
   } catch (e) {
     console.error(e);

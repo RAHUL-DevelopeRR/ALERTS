@@ -217,6 +217,58 @@ export function isLocked(): boolean {
   return locked;
 }
 
+/** Seconds the PIN pad stays blocked after wrong tries (shared by the lock screen and confirmPin). */
+function blockedSeconds(): number {
+  const f = readFails();
+  const until = f.last + lockoutSeconds(f.n) * 1000;
+  return Math.max(0, Math.ceil((until - Date.now()) / 1000));
+}
+
+/** One PIN try, counted like the lock screen's: null when right, else the message to show (tries left / wait). */
+async function tryPin(verify: (pin: string) => Promise<boolean>, pin: string): Promise<string | null> {
+  if (await verify(pin)) {
+    writeFails(null);
+    return null;
+  }
+  const f = readFails();
+  const next = { n: f.n + 1, last: Date.now() };
+  writeFails(next);
+  return next.n >= 5 ? t('pin.wait', { s: lockoutSeconds(next.n) }) : t('pin.wrong', { n: 5 - next.n });
+}
+
+/**
+ * Ask for this phone's PIN before an action that removes data (Erase all entries). Wrong tries count like the lock
+ * screen's. Resolves false when the person cancels or presses Back.
+ */
+export function confirmPin(title: string, verify: (pin: string) => Promise<boolean>): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean): void => {
+      if (settled) return;
+      settled = true;
+      closeGate();
+      resolve(ok);
+    };
+    const cancel = h('button', {
+      class: 'link',
+      attrs: { type: 'button', 'data-testid': 'pin-cancel' },
+      text: t('common.cancel'),
+      style: { alignSelf: 'center' },
+      on: { click: () => finish(false) },
+    });
+    void pinPad({
+      title,
+      extra: cancel,
+      blockedFor: blockedSeconds,
+      submit: (pin) => tryPin(verify, pin),
+      onBack: () => {
+        finish(false);
+        return true;
+      },
+    }).then(() => finish(true));
+  });
+}
+
 /** Show the lock screen until the right PIN is entered. */
 export async function lock(verify: (pin: string) => Promise<boolean>): Promise<void> {
   if (locked) return;
@@ -231,21 +283,8 @@ export async function lock(verify: (pin: string) => Promise<boolean>): Promise<v
   await pinPad({
     title: t('pin.enter'),
     extra: forgot,
-    blockedFor: () => {
-      const f = readFails();
-      const until = f.last + lockoutSeconds(f.n) * 1000;
-      return Math.max(0, Math.ceil((until - Date.now()) / 1000));
-    },
-    submit: async (pin) => {
-      if (await verify(pin)) {
-        writeFails(null);
-        return null;
-      }
-      const f = readFails();
-      const next = { n: f.n + 1, last: Date.now() };
-      writeFails(next);
-      return next.n >= 5 ? t('pin.wait', { s: lockoutSeconds(next.n) }) : t('pin.wrong', { n: 5 - next.n });
-    },
+    blockedFor: blockedSeconds,
+    submit: (pin) => tryPin(verify, pin),
     onBack: () => false,
   });
   locked = false;
