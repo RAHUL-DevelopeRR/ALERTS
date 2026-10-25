@@ -9,7 +9,7 @@
       "binding": "DB",
       "database_name": "khata",
       // Replace with the id printed by: npx wrangler d1 create khata --location=apac
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "17708293-d548-4bd8-ad9c-b76596867a66",
       "migrations_dir": "migrations"
     }
   ],
