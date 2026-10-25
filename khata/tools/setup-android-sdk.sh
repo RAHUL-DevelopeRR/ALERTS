@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Installs the Android SDK pieces the release build needs: command-line tools, platform-tools, the Android 36
 # platform and build-tools 35 + 36 (a fresh cloud container has none). Does nothing when they are already there.
-# Needs Java 21 (the cloud image has it) and network access to dl.google.com.
+# Linux or macOS (Windows: use WSL). Needs Java 21 and network access to dl.google.com.
 #
-# Usage:  ./khata/tools/setup-android-sdk.sh        (ANDROID_HOME defaults to /opt/android-sdk)
+# Usage:  ./khata/tools/setup-android-sdk.sh
+#         (ANDROID_HOME defaults to ~/Library/Android/sdk on macOS, ~/Android/Sdk elsewhere)
 set -euo pipefail
 
-SDK="${ANDROID_HOME:-/opt/android-sdk}"
-CLT_ZIP="https://dl.google.com/android/repository/commandlinetools-linux-16111833_latest.zip"
+if [ "$(uname)" = Darwin ]; then OS=mac; DEFAULT_SDK="$HOME/Library/Android/sdk"; else OS=linux; DEFAULT_SDK="$HOME/Android/Sdk"; fi
+SDK="${ANDROID_HOME:-$DEFAULT_SDK}"
+CLT_ZIP="https://dl.google.com/android/repository/commandlinetools-$OS-16111833_latest.zip"
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 if [ -d "$SDK/platforms/android-36" ] && [ -d "$SDK/build-tools/36.0.0" ] && [ -d "$SDK/platform-tools" ]; then

@@ -22,3 +22,5 @@ release/
 # Server secrets written by tools/deploy-server.sh: never commit
 api/.deploy-secrets
 api/.deploy-secrets.tmp
+# The signing key as one value (tools/signing-bundle.mjs): never commit
+KK_SIGNING*

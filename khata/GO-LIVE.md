@@ -4,7 +4,27 @@ One command deploys the server to the shop's own Cloudflare account, creates the
 with the server address inside: `./khata/tools/go-live.sh`. Afterwards every phone only signs in with a **user id and
 password**. Nobody types a server address, a setup key or a code. Cost: ₹0 (Cloudflare's free plan).
 
-## 1. Once, in Cloudflare (the shop owner's account, about 10 minutes)
+## On your own computer (simplest)
+
+Needs Node.js 20+, Java 21 (a JDK) and git, on Linux or macOS (Windows: WSL). Before the first run, sign in or sign
+up at <https://dash.cloudflare.com> (Free plan) and open **Workers & Pages** once to pick the **workers.dev** name.
+
+```bash
+git clone https://github.com/rahul-developerr/alerts.git
+cd alerts
+git checkout claude/grocery-debt-tracking-app-355efv
+(cd khata/api && npm ci && npx wrangler login)        # signs in to Cloudflare in the browser, once
+KK_SIGNING_FILE=~/Downloads/KK_SIGNING-value.txt ./khata/tools/go-live.sh
+```
+
+The first run asks for the shop's name and the owner's user id and password (typed, not shown), deploys the server,
+installs the Android SDK if the computer has none (about 650 MB), and ends with the APK's path
+(`khata/release/kadan-kanakku-<version>.apk`) and what to do on the phones (section 4). Keep `KK_SIGNING-value.txt`
+outside the repository folder and private: it is the app's signing key.
+
+## In a cloud session instead
+
+### 1. Once, in Cloudflare (the shop owner's account, about 10 minutes)
 
 1. Sign in or sign up at <https://dash.cloudflare.com> (Free plan).
 2. Open **Workers & Pages** once and pick the **workers.dev** name (the server's address becomes
@@ -14,7 +34,7 @@ password**. Nobody types a server address, a setup key or a code. Cost: ₹0 (Cl
    (Custom token instead: Account › Workers Scripts › Edit, Account › D1 › Edit, Account › Account Settings › Read.)
 4. Copy the **Account ID** (Workers & Pages overview, right-hand side).
 
-## 2. Once, in the Claude Code cloud environment's settings (never in a chat message)
+### 2. Once, in the Claude Code cloud environment's settings (never in a chat message)
 
 The cloud environment menu in the session's title bar → **Edit** → environment variables / secrets:
 
@@ -30,7 +50,7 @@ The cloud environment menu in the session's title bar → **Edit** → environme
 `KK_SIGNING` is also the backup of the signing key: APKs signed with another key cannot update the app already on
 the phones. Keep a copy in a password manager too. New settings reach **new** sessions.
 
-## 3. In a new session
+### 3. In a new session
 
 Say: *"Go live: follow khata/GO-LIVE.md."* The session runs
 
