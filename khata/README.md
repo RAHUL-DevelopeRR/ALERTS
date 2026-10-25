@@ -78,7 +78,7 @@ Deploy `api/` to the shop's own Cloudflare account (free plan is enough) with `.
 after `cd khata/api && npm ci && npx wrangler login`; it applies the D1 migrations, builds and uploads the web app
 with the Worker, and prints the server address, the setup key and the web app URL; details in `api/README.md`.
 Then on the owner's phone: Settings → Server copy → First-time setup (server address, setup key, and the owner's own
-user id and password, which this step creates). Print the recovery codes (Settings → Devices) and keep them in the
+user id and password, which this step creates). Print the recovery codes (Settings → Phones) and keep them in the
 cash box. Other phones: see "Several counters, one ledger" below.
 
 **Logins (v2).** First-time setup makes the owner's user id and password (a phone paired with a code instead uses
