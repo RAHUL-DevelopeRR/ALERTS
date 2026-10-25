@@ -116,13 +116,27 @@ safe: never while someone is typing or a dialog is open. No network: entries are
 "Offline · 1 waiting", and they go out when the network is back. The language is each phone's own choice. Cost:
 still ₹0 (a busy phone makes about 4,000 small requests a day; Workers Free allows 100,000 for the shop).
 
-**Sync button (2.3.1).** Home has a **Sync / ஒத்திசை** button in the top-right corner (only on a phone that is
-connected to the shop server). One tap sends this phone's waiting entries and fetches the other phones' entries at
-once, without waiting for the 20-second check (0.1 s against the local test server; on mobile data expect about a
-second). It then says what happened: "Synced. 2 updates from the other phones.", "Synced. Everything is up to
-date." or "No internet. The entries are safe on this phone…". It cannot make *another* phone fetch: that phone
-gets the entry by itself within 20 seconds, when a customer's page is opened there, or when someone taps Sync on
-it. Signing in stays the same: user id and password.
+**Sync button (2.3.1, on every phone from 2.3.2).** Home has a **Sync / ஒத்திசை** button in the top-right
+corner. On a signed-in phone one tap does both directions at once: it sends this phone's waiting entries to the
+server (push) and brings the other phones' entries from the server (pull), without waiting for the 20-second check
+(0.1 s against the local test server; on mobile data expect about a second). It then says what happened: "Synced.
+2 updates from the other phones.", "Synced. Everything is up to date." or "No internet. The entries are safe on
+this phone…". It cannot make *another* phone fetch: that phone gets the entry by itself within 20 seconds, when a
+customer's page is opened there, or when someone taps Sync on it. On a phone that is not signed in yet, the tap
+says so and **Sign in** opens the user id + password form. Signing in stays the same: user id and password.
+
+**No server address to type (2.3.2).** In an APK built with `SHOP_SERVER_URL`, neither the first-launch sign-in
+nor Settings → Shop server shows an address field: one line says "Shop server: <name>.workers.dev" (with a small
+Change link for whoever installs the phones). Only a generic test build, made before the server exists, asks for
+the address.
+
+**Start fresh (2.3.2).** After trying the app out, Settings → Backup → **Erase all entries and start fresh**
+removes every customer and entry from a phone that is *not* connected to a shop server: it asks for the PIN (if
+one is set), keeps a "Before erasing" copy (Restore a daily copy brings everything back), and customer numbers
+start again at C-0001. The shop name, PIN and settings stay. Do it **before** connecting a phone to the shop's
+real server: connecting uploads everything already on the phone. A connected phone is cleared by signing out
+(Settings → Account → remove the ledger); the shop's server copy stays. (The voice "Reset counters" button, now
+"Clear the voice accuracy log", only ever cleared the voice accuracy numbers, never entries.)
 
 **Cloudflare free plan, in total (for the whole shop, all phones together, per day):**
 
@@ -150,7 +164,7 @@ Every update must be signed with the same release key (`app/README.md` → "Sign
 application id `live.zerox.kadankanakku`; bump `versionCode` and `versionName` in `app/android/app/build.gradle`.
 Installing an update keeps all data on the phone.
 
-## Verification status (v2.3.1)
+## Verification status (v2.3.2)
 
 - App: `tsc` clean; vitest green (unit, voice-parser fixtures with per-category accuracy, reviewer suites for the
   ledger, sync, native, speech platform, voice and the web/accounts client); five Chromium e2e harnesses

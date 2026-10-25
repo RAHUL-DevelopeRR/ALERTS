@@ -9,8 +9,8 @@
  *       owner's own user id + password, Users -> Add user (staff, step-up with the owner's password);
  *     counter phone: first run "Sign in to my shop" with only the staff user id + password (server built in);
  *   then: an entry on one phone appears on the other by itself (2 s push + 20 s poll, live redraw), a customer's
- *   page is fresh at once when opened, the other direction, the Home "Sync" button (top right; hidden while not
- *   connected) fetches the other phone's entry at once and says so, Sync with no internet says so, an offline phone
+ *   page is fresh at once when opened, the other direction, the Home "Sync" button (top right; before connecting it
+ *   says the phone is not connected) fetches the other phone's entry at once and says so, Sync with no internet says so, an offline phone
  *   catches up when back online, and a phone where someone is typing in the search box is not redrawn under their
  *   fingers.
  * Screenshots: e2e/screenshots/md-NN-name.png. Exits non-zero on the first failed assertion. Stops wrangler dev.
@@ -206,12 +206,17 @@ async function main() {
 
     console.log('owner phone: First-time setup with the setup key and the owner\'s own user id + password');
     await A.home();
-    check(await A.tid('home-sync').isHidden(), 'no Sync button while the phone is not connected to a shop server');
+    check(await A.tid('home-sync').isVisible(), 'the Sync button is on Home before connecting too');
+    await A.tid('home-sync').click();
+    await A.page.locator('.dialog').waitFor();
+    check((await A.text('.dialog-title')) === 'Not connected to the shop server', 'tapping it before connecting says so (and offers Sign in)');
+    await A.page.locator('.dialog .btn-plain').click();
     await A.tid('nav-settings').click();
     await A.page.evaluate(() => document.getElementById('sec-sync')?.scrollIntoView());
     await A.tid('srv-open').click();
     check((await A.tid('srv-mode-login').getAttribute('class')) === 'on', 'the connect form opens on "User id & password"');
-    check((await A.tid('srv-url').inputValue()) === worker.url, 'the built-in shop server is filled in');
+    check((await A.tid('srv-url-line').isVisible()) && (await A.tid('srv-url').isHidden()), 'Settings shows the built-in shop server as one line, no address to type');
+    check((await A.text('[data-testid="srv-url-line"]')).includes(new URL(worker.url).host) && (await A.tid('srv-url').inputValue()) === worker.url, 'the line names the shop server');
     await A.tid('srv-mode-setup').click();
     await A.tid('srv-key').fill(key);
     await A.tid('srv-own-user').fill(OWNER.username);
