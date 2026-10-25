@@ -8,6 +8,7 @@ import { dialog } from '../components/overlay';
 import { searchField } from '../components/search';
 import { shell } from '../components/shell';
 import { syncPill } from '../components/sync-pill';
+import { syncButton } from '../components/sync-button';
 import { money, toneClass } from '../format';
 import * as router from '../router';
 import type { Screen } from '../router';
@@ -97,8 +98,11 @@ export const homeScreen: Screen = async (root, route) => {
     delete route.params.fresh;
   }
   const pill = syncPill();
+  // Top right: send this phone's entries and get the other phones' now, without waiting for the 20-s poll.
+  const syncBtn = syncButton();
   const { body } = shell(root, {
     title: s.shop_name || t('app.name'),
+    actions: [syncBtn.el],
     below: pill.el,
   });
   root.classList.add('home');
@@ -288,5 +292,8 @@ export const homeScreen: Screen = async (root, route) => {
   );
   root.append(micFab({}), fab);
   root.appendChild(bar);
-  return () => pill.dispose();
+  return () => {
+    pill.dispose();
+    syncBtn.dispose();
+  };
 };

@@ -300,6 +300,10 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('[data-testid="sync-pill"]')?.textContent?.includes('Online copy'), null, { timeout: 15_000 });
     check((await text('[data-testid="sync-pill"]')) === 'Online copy', 'pill says "Online copy"');
     check((await text('.summary-amt')) === '₹300', 'home total ₹300 (Kamala 150 + Murugan 150)');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+    await tid('home-sync').click();
+    const syncedMsg = await toast();
+    check(syncedMsg === 'Synced. Everything is up to date.', `the Sync button works on the web app too: ${syncedMsg}`);
     const st1 = await storageState();
     check(st1.idb.includes('kadan-kanakku-sqljs'), 'IndexedDB copy exists after a normal sign-in');
     check(!st1.ls.some((k) => /token|secret/.test(k)), `no token in localStorage (${st1.ls.join(',')})`);

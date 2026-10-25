@@ -184,6 +184,9 @@ export class Engine implements SyncEngine {
   private rerunLoud = false;
   /** ms timestamp of the last sign of use: app opened, a touch, a save here, other phones' rows arriving. */
   private lastActivityAt = 0;
+  /** Counts notifyLocalWrite() calls; `sentWrites` = the count when the latest cycle began (its push read the outbox after those saves). */
+  private writes = 0;
+  private sentWrites = 0;
 
   private running: Promise<void> | null = null;
   private rerun = false;
@@ -408,6 +411,7 @@ export class Engine implements SyncEngine {
 
   private async cycle(manual: boolean, quiet = false): Promise<void> {
     this.pulled = 0;
+    this.sentWrites = this.writes;
     try {
       await this.cycleInner(manual, quiet);
     } finally {
@@ -669,9 +673,12 @@ export class Engine implements SyncEngine {
     void this.refresh();
     if (!this.started) return;
     this.markActive();
+    this.writes++;
     if (this.debounceTimer !== null) this.clearT(this.debounceTimer);
     this.debounceTimer = this.setT(() => {
       this.debounceTimer = null;
+      // A cycle that began after the last save (the screen asking for fresh data, Sync now) already sent it.
+      if (this.sentWrites >= this.writes) return;
       this.trigger('write');
     }, this.debounceMs);
   }

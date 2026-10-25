@@ -100,7 +100,10 @@ export function dialog<T>(opts: {
     const remove = pushLayer(scrim, () => finish(opts.dismissValue));
     refresh();
     const first = box.querySelector<HTMLElement>('input, textarea, select') ?? btns.find((x) => x.b.kind === 'primary')?.el;
-    setTimeout(() => first?.focus(), 30);
+    // Never pull the focus back to the first field once someone is already typing in the dialog.
+    setTimeout(() => {
+      if (!box.contains(document.activeElement)) first?.focus();
+    }, 30);
   });
 }
 

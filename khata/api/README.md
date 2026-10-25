@@ -111,7 +111,14 @@ on first launch and type only their user id and password. Pairing codes still wo
 `GET /v1/sync/pull` for other phones' rows every 20 s (every minute after 5 minutes with no touch, no save and
 nothing new). An empty pull is three indexed reads in one batch plus the auth middleware's device-row update. A busy
 counter phone left open day and night makes about 4,000 requests (4,000 D1 row writes for the device row), so three
-phones stay around 12,000 of the 100,000 requests and 100,000 row writes Workers Free gives per day.
+phones stay around 12,000 of the 100,000 requests and 100,000 row writes Workers Free gives per day. The Home "Sync"
+button (2.3.1) is one push (if anything waits) plus one pull per tap.
+
+Workers Free, per account and UTC day (checked against Cloudflare's docs, October 2026): 100,000 Worker requests
+(error 1027 past it), 10 ms CPU per request, 50 subrequests / D1 queries per request (a `db.batch()` counts once);
+D1: 5 million rows read and 100,000 rows written per day (an index on a written column adds a written row),
+500 MB per database, 5 GB per account. Requests for static assets (the web app) are free and not counted; only
+`/v1/*` runs the Worker (`run_worker_first`). The daily counts reset at 00:00 UTC (05:30 IST).
 
 Notes:
 

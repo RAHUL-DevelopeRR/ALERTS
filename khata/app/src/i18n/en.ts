@@ -184,6 +184,13 @@ export const en = {
   'sync.offlinePending': 'Offline · {n} waiting',
   'sync.error': 'Server problem',
   'sync.revoked': 'Removed from shop',
+  'sync.btn': 'Sync',
+  'sync.btnBusy': 'Syncing…',
+  'sync.btnHelp': 'Sync now: send this phone’s entries and get the other phones’ entries',
+  'sync.doneNew': 'Synced. {n} updates from the other phones.',
+  'sync.doneOne': 'Synced. 1 update from the other phones.',
+  'sync.doneNone': 'Synced. Everything is up to date.',
+  'sync.offlineToast': 'No internet. The entries are safe on this phone and go to the server when the network is back.',
 
   // ---- customer edit
   'cust.new': 'New customer',

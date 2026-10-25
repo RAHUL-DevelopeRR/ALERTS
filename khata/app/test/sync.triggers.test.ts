@@ -74,6 +74,32 @@ describe('triggers', () => {
     p.engine.stop();
   });
 
+  it('a save that a later cycle already sent is not sent again 2 s later (no extra request)', async () => {
+    const { w, p, cid } = await paired();
+    p.engine.start();
+    await p.engine.whenIdle();
+    const base = p.fetchCalls.length;
+    await p.repo.addEntry({ customer_id: cid, kind: 'GIVE', amount_paise: 100 });
+    p.engine.notifyLocalWrite();
+    await p.engine.syncNow(); // Sync tapped right after the save (or a screen's refreshIfStale)
+    const afterTap = p.fetchCalls.length;
+    expect(afterTap - base).toBe(2); // push + pull
+    expect(p.engine.status().pending).toBe(0);
+    await tick(w, p, DEBOUNCE_MS);
+    expect(p.fetchCalls.length).toBe(afterTap); // the 2-s timer finds nothing left to send
+
+    // A save made while a cycle runs is still sent by its own timer.
+    await p.repo.addEntry({ customer_id: cid, kind: 'GIVE', amount_paise: 200 });
+    const running = p.engine.syncNow();
+    await p.repo.addEntry({ customer_id: cid, kind: 'GIVE', amount_paise: 300 });
+    p.engine.notifyLocalWrite();
+    await running;
+    await tick(w, p, DEBOUNCE_MS);
+    expect(p.engine.status().pending).toBe(0);
+    expect(w.server.entries.size).toBe(3);
+    p.engine.stop();
+  });
+
   it('notifyLocalWrite refreshes the pending count right away', async () => {
     const { p, cid } = await paired();
     await p.engine.syncNow();

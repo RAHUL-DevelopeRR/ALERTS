@@ -74,6 +74,7 @@ const ICONS = {
   warn: '<path d="M12 4 2.8 20h18.4z"/><path d="M12 10v4.5M12 17.3v.2"/>',
   cloud: '<path d="M7 18.5h10a4 4 0 0 0 .6-8A5.5 5.5 0 0 0 7 9.5a4.5 4.5 0 0 0 0 9z"/>',
   cloudOff: '<path d="M7 18.5h10a4 4 0 0 0 .6-8A5.5 5.5 0 0 0 7 9.5a4.5 4.5 0 0 0 0 9z"/><path d="M4 4l16 16"/>',
+  sync: '<path d="M19.5 9A8 8 0 0 0 5.6 6.6L4 8.5"/><path d="M4 4v4.5h4.5"/><path d="M4.5 15a8 8 0 0 0 13.9 2.4l1.6-1.9"/><path d="M20 20v-4.5h-4.5"/>',
   phoneOnly: '<rect x="7" y="2.8" width="10" height="18.4" rx="2"/><path d="M11 18h2"/>',
   backspace: '<path d="M9 5.5h11v13H9L3.5 12z"/><path d="m12 9.5 5 5M17 9.5l-5 5"/>',
   share: '<circle cx="6.5" cy="12" r="2.3"/><circle cx="17.5" cy="6" r="2.3"/><circle cx="17.5" cy="18" r="2.3"/><path d="m8.5 11 7-4M8.5 13l7 4"/>',

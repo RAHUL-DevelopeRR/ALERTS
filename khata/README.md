@@ -116,6 +116,29 @@ safe: never while someone is typing or a dialog is open. No network: entries are
 "Offline · 1 waiting", and they go out when the network is back. The language is each phone's own choice. Cost:
 still ₹0 (a busy phone makes about 4,000 small requests a day; Workers Free allows 100,000 for the shop).
 
+**Sync button (2.3.1).** Home has a **Sync / ஒத்திசை** button in the top-right corner (only on a phone that is
+connected to the shop server). One tap sends this phone's waiting entries and fetches the other phones' entries at
+once, without waiting for the 20-second check (0.1 s against the local test server; on mobile data expect about a
+second). It then says what happened: "Synced. 2 updates from the other phones.", "Synced. Everything is up to
+date." or "No internet. The entries are safe on this phone…". It cannot make *another* phone fetch: that phone
+gets the entry by itself within 20 seconds, when a customer's page is opened there, or when someone taps Sync on
+it. Signing in stays the same: user id and password.
+
+**Cloudflare free plan, in total (for the whole shop, all phones together, per day):**
+
+| Limit | Free plan | This shop with fast sync |
+|---|---|---|
+| Requests to the server (Workers) | 100,000 a day for the account | about 4,000 per busy phone left open day and night; 3 phones ≈ 12,000 |
+| Database rows written (D1) | 100,000 a day | about one per request plus ~8 per entry; 3 phones + 300 entries ≈ 15,000 |
+| Database rows read (D1) | 5,000,000 a day | a few per request; far below |
+| Database size | 500 MB per database, 5 GB per account | a few MB a year |
+| CPU time | 10 ms per request | measured inside it (see `api/README.md`) |
+| Web app files | free and unlimited (not counted) | – |
+
+The daily counts reset at 05:30 IST (midnight UTC). If the shop ever went over, the server would refuse requests
+until the reset: every phone keeps working on its own ledger and catches up after 05:30 – nothing is lost. The app
+also stops any single phone at 10,000 requests a day, so one broken phone cannot use up the shop's 100,000.
+
 If someone does not know what to do: after the language, a new install asks only "Sign in to my shop" or "Start a
 new shop", and a counter phone always takes the first; the owner gives each person their user id and password. A
 phone that was set up wrong can be signed out (Settings → Account) and signed in again; nothing on the server is
@@ -127,7 +150,7 @@ Every update must be signed with the same release key (`app/README.md` → "Sign
 application id `live.zerox.kadankanakku`; bump `versionCode` and `versionName` in `app/android/app/build.gradle`.
 Installing an update keeps all data on the phone.
 
-## Verification status (v2.3.0)
+## Verification status (v2.3.1)
 
 - App: `tsc` clean; vitest green (unit, voice-parser fixtures with per-category accuracy, reviewer suites for the
   ledger, sync, native, speech platform, voice and the web/accounts client); five Chromium e2e harnesses

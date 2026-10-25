@@ -436,6 +436,30 @@ select.input { appearance: none; -webkit-appearance: none; }
 .pill.warn { background: var(--amber); color: #3b2a00; }
 .pill.bad { background: #ffcdd2; color: #7f0000; }
 
+/* Home's Sync button, top right of the green bar */
+.sync-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px 0 12px;
+  margin: 0 8px 0 4px;
+  border: 1.5px solid rgba(255, 255, 255, .6);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, .12);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.sync-btn:active { background: rgba(255, 255, 255, .28); }
+.sync-btn:disabled { opacity: .85; }
+.sync-btn.spinning .ic-sm { animation: spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .sync-btn.spinning .ic-sm { animation: none; }
+}
+
 /* ---------------------------------------------------------------- customer detail */
 .hero { text-align: center; padding: 14px 12px 12px; }
 .hero-meta { font-size: 15px; color: var(--muted); }

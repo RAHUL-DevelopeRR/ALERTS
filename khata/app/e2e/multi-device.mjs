@@ -9,8 +9,10 @@
  *       owner's own user id + password, Users -> Add user (staff, step-up with the owner's password);
  *     counter phone: first run "Sign in to my shop" with only the staff user id + password (server built in);
  *   then: an entry on one phone appears on the other by itself (2 s push + 20 s poll, live redraw), a customer's
- *   page is fresh at once when opened, the other direction, an offline phone catches up when back online, and a
- *   phone where someone is typing in the search box is not redrawn under their fingers.
+ *   page is fresh at once when opened, the other direction, the Home "Sync" button (top right; hidden while not
+ *   connected) fetches the other phone's entry at once and says so, Sync with no internet says so, an offline phone
+ *   catches up when back online, and a phone where someone is typing in the search box is not redrawn under their
+ *   fingers.
  * Screenshots: e2e/screenshots/md-NN-name.png. Exits non-zero on the first failed assertion. Stops wrangler dev.
  *
  *   node e2e/multi-device.mjs
@@ -124,15 +126,21 @@ function phone(page, label) {
   const text = async (sel) => (await page.locator(sel).first().innerText()).trim();
   const settle = () => page.waitForTimeout(250);
   const pulls = [];
-  page.on('request', (r) => { if (r.url().includes('/v1/sync/pull')) pulls.push(Date.now()); });
+  const reqs = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/v1/sync/pull')) pulls.push(Date.now());
+    const m = /\/v1\/sync\/(push|pull)/.exec(r.url());
+    if (m) reqs.push({ t: Date.now(), what: m[1] });
+  });
+  page.on('requestfailed', (r) => { if (/\/v1\/sync\//.test(r.url())) reqs.push({ t: Date.now(), what: 'failed' }); });
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|ERR_INTERNET_DISCONNECTED|net::ERR/.test(m.text())) errors.push(`${label}: ${m.text()}`); });
   page.on('pageerror', (e) => errors.push(`${label}: ${String(e)}`));
   return {
-    page, label, tid, text, settle, pulls, errors,
-    async shot(name) {
+    page, label, tid, text, settle, pulls, reqs, errors,
+    async shot(name, keepToast = false) {
       await settle();
-      await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+      if (!keepToast) await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
       await page.screenshot({ path: join(SHOTS, `md-${String(++shotNo).padStart(2, '0')}-${name}.png`) });
     },
     async toast() {
@@ -198,6 +206,7 @@ async function main() {
 
     console.log('owner phone: First-time setup with the setup key and the owner\'s own user id + password');
     await A.home();
+    check(await A.tid('home-sync').isHidden(), 'no Sync button while the phone is not connected to a shop server');
     await A.tid('nav-settings').click();
     await A.page.evaluate(() => document.getElementById('sec-sync')?.scrollIntoView());
     await A.tid('srv-open').click();
@@ -228,7 +237,7 @@ async function main() {
     await A.page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
     await A.tid('stepup-pw').fill(OWNER.password);
     await A.page.locator('.dialog .btn-primary').click();
-    await A.page.waitForFunction((u) => [...document.querySelectorAll('.toast .toast-msg')].some((t) => t.textContent?.includes(u)), STAFF.username, { timeout: 20000 });
+    await A.page.waitForFunction((u) => [...document.querySelectorAll('.toast .toast-msg')].some((t) => t.textContent === `Login created for ${u}`), STAFF.username, { timeout: 20000 });
     check(true, `staff login "${STAFF.username}" made after the owner's password (step-up)`);
 
     console.log('counter phone: first run, "Sign in to my shop" with only user id + password');
@@ -254,6 +263,8 @@ async function main() {
     await B.page.waitForFunction(() => document.querySelectorAll('[data-testid="cust-row"]').length >= 2, null, { timeout: 15000 });
     check((await B.rowSide('Ramu').innerText()).includes('₹300'), 'counter phone got the shop\'s ledger: Ramu ₹300');
     check((await B.text('.topbar h1')).includes('Sri Murugan Stores'), 'counter phone shows the shop\'s name');
+    const box = await B.tid('home-sync').boundingBox();
+    check(!!box && box.x > 393 / 2 && box.y < 120, `signed in: the Sync button is in the top-right corner of Home (x ${Math.round(box?.x ?? -1)}, y ${Math.round(box?.y ?? -1)})`);
     await B.shot('staff-home-after-sign-in');
 
     console.log('fast sync: owner phone saves, the counter phone shows it by itself');
@@ -306,7 +317,29 @@ async function main() {
     check((await A.page.locator('.badge-dev', { hasText: 'Counter 2' }).count()) >= 1, 'the entry shows it came from "Counter 2"');
     await A.shot('owner-customer-updated');
 
+    console.log('Sync button: the counter phone taps Sync and has the owner\'s new entry at once');
+    await B.home();
+    const polls = B.pulls.length;
+    for (let i = 0; i < 60 && B.pulls.length === polls; i++) await B.page.waitForTimeout(500); // just polled: the next is ~20 s away
+    await A.tid('btn-gave').click(); // the owner phone is on Kamala's page
+    await A.page.locator('.screen[data-route="entry"]').waitFor();
+    await A.typeAmount('40');
+    await A.tid('entry-save').click();
+    await A.page.waitForTimeout(3000); // pushed 2 s after the save
+    const kamalaOnB = () => B.page.evaluate(() => [...document.querySelectorAll('[data-testid="cust-row"]')].find((r) => /Kamala/.test(r.textContent ?? ''))?.querySelector('.cust-side')?.textContent ?? '');
+    check((await kamalaOnB()).includes('₹150'), 'before the tap the counter phone still shows Kamala ₹150');
+    const tapped = Date.now();
+    await B.tid('home-sync').click();
+    await B.page.waitForFunction(() => /₹190/.test([...document.querySelectorAll('[data-testid="cust-row"]')].find((r) => /Kamala/.test(r.textContent ?? ''))?.querySelector('.cust-side')?.textContent ?? ''), null, { timeout: 15000 });
+    const tookTap = Date.now() - tapped;
+    check(tookTap < 3000, `Kamala ₹190 on the counter phone ${(tookTap / 1000).toFixed(1)} s after tapping Sync (no waiting for the 20-s poll)`);
+    const synced = await B.toast();
+    check(/^Synced\. (1 update|\d+ updates) from the other phones\.$/.test(synced), `the toast says what came: ${synced}`);
+    await B.shot('staff-sync-tapped', true);
+
     console.log('offline counter phone: entry waits, goes out when the network is back');
+    await B.page.locator('[data-testid="cust-row"]', { hasText: 'Kamala' }).click();
+    await B.page.locator('.screen[data-route="customer"]').waitFor();
     await ctxB.setOffline(true);
     await B.tid('btn-got').click();
     await B.page.locator('.screen[data-route="entry"]').waitFor();
@@ -315,13 +348,19 @@ async function main() {
     await B.home();
     await B.page.waitForFunction(() => /1/.test(document.querySelector('[data-testid="sync-pill"]')?.textContent ?? ''), null, { timeout: 10000 });
     log(`ok  counter phone offline, its pill says: ${await B.text('[data-testid="sync-pill"]')}`);
+    await B.page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+    await B.tid('home-sync').click();
+    const offMsg = await B.toast();
+    check(/^No internet\./.test(offMsg), `Sync with no internet says so: ${offMsg}`);
     await B.shot('staff-offline-waiting');
     await B.page.waitForTimeout(3000);
-    check((await A.text('[data-testid="balance"]')) === '₹150', 'nothing reached the owner phone while the counter phone was offline');
+    check((await A.text('[data-testid="balance"]')) === '₹190', 'nothing reached the owner phone while the counter phone was offline');
     await ctxB.setOffline(false);
     const t2 = Date.now();
-    await A.page.waitForFunction(() => document.querySelector('[data-testid="balance"]')?.textContent?.trim() === '₹100', null, { timeout: 30000 });
-    check(Date.now() - t2 < 25000, `back online: the owner phone shows Kamala ₹100 ${((Date.now() - t2) / 1000).toFixed(1)} s later`);
+    await A.page.waitForFunction(() => document.querySelector('[data-testid="balance"]')?.textContent?.trim() === '₹140', null, { timeout: 30000 });
+    check(Date.now() - t2 < 25000, `back online: the owner phone shows Kamala ₹140 ${((Date.now() - t2) / 1000).toFixed(1)} s later`);
+    const since = (p) => p.reqs.filter((r) => r.t >= t2 - 8000).map((r) => `${r.what}@${((r.t - t2) / 1000).toFixed(1)}`).join(' ');
+    log(`   requests around going online (s from it): counter [${since(B)}] owner [${since(A)}]`);
 
     console.log('no redraw under the fingers: typing in the search box on the counter phone');
     await B.home();

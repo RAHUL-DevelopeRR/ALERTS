@@ -15,8 +15,8 @@ android {
         applicationId "live.zerox.kadankanakku"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 9
-        versionName "2.3.0"
+        versionCode 10
+        versionName "2.3.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         // The app ships Tamil and English only; drop the ~90 other locales AndroidX/AppCompat would bundle.
         androidResources {
